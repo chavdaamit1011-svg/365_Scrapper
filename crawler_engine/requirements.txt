@@ -1,0 +1,16 @@
+# The Scrapper - Web Crawler Engine Dependencies
+# Install with: pip install -r requirements.txt
+
+# HTTP & HTML Parsing
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+tldextract>=5.1.0
+
+# Database & Storage
+pymongo>=4.6.0
+
+# Framework & JS Rendering (Optional Fallback)
+Scrapy>=2.11.0
+playwright>=1.40.0
+
