@@ -102,6 +102,25 @@ export default function DashboardPage() {
     }
   }, [crawler.status]);
 
+  // Automatically purge any targets that have already been scraped from the pending queue
+  useEffect(() => {
+    if (crawler.scrapedResults.length > 0) {
+      const completedDomains = new Set(
+        crawler.scrapedResults.map((r) => r.domain.toLowerCase().trim())
+      );
+      setTargets((prev) => {
+        const pendingOnly = prev.filter((t) => !completedDomains.has(t.domain.toLowerCase().trim()));
+        if (pendingOnly.length !== prev.length) {
+          try {
+            localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(pendingOnly));
+          } catch (e) {}
+          return pendingOnly;
+        }
+        return prev;
+      });
+    }
+  }, [crawler.scrapedResults]);
+
   const fetchUsers = async () => {
     try {
       setIsLoadingUsers(true);
@@ -142,11 +161,18 @@ export default function DashboardPage() {
 
   // Target Ingestion Handlers
   const handleAddTargets = (newItems: TargetItem[]) => {
+    const completedDomains = new Set(
+      crawler.scrapedResults.map((r) => r.domain.toLowerCase().trim())
+    );
+
     setTargets((prev) => {
       const existingIds = new Set(prev.map((p) => p.id));
       const existingDomains = new Set(prev.map((p) => p.domain.toLowerCase()));
       const uniqueNew = newItems.filter(
-        (item) => !existingIds.has(item.id) && !existingDomains.has(item.domain.toLowerCase())
+        (item) =>
+          !existingIds.has(item.id) &&
+          !existingDomains.has(item.domain.toLowerCase()) &&
+          !completedDomains.has(item.domain.toLowerCase().trim())
       );
       if (uniqueNew.length === 0) return prev;
       const updated = [...uniqueNew, ...prev];

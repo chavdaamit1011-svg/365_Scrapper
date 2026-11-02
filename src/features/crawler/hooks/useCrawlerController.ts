@@ -144,7 +144,8 @@ export function useCrawlerController(
         }
       } catch (e) {}
 
-      // Remove the completed target from pending Queue so old targets don't linger
+      // Remove the completed target from pending Queue immediately
+      targetsRef.current = targetsRef.current.filter((t) => t.id !== currentTarget.id);
       if (onTargetCompleted) {
         onTargetCompleted(currentTarget.id);
       }
