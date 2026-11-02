@@ -10,18 +10,25 @@ import {
 
 const STORAGE_KEY_RESULTS = 'the_scrapper_scraped_results';
 
-export function useCrawlerController(targets: TargetItem[]) {
+export function useCrawlerController(
+  targets: TargetItem[],
+  onTargetCompleted?: (targetId: string) => void
+) {
   const [status, setStatus] = useState<CrawlerExecutionState>('IDLE');
   const [scrapedResults, setScrapedResults] = useState<ScrapedDataRecord[]>([]);
-  const [currentIndex, setCurrentIndex] = useState<number>(0);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [currentTargetName, setCurrentTargetName] = useState<string | null>(null);
+
+  const targetsRef = useRef<TargetItem[]>(targets);
+  useEffect(() => {
+    targetsRef.current = targets;
+  }, [targets]);
 
   const isCancelledRef = useRef<boolean>(false);
   const isPausedRef = useRef<boolean>(false);
   const elapsedTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Hydrate scraped results from MongoDB / backend on mount, with localStorage fallback
+  // Hydrate scraped results from MongoDB on mount
   useEffect(() => {
     const fetchMongoResults = async () => {
       try {
@@ -81,9 +88,19 @@ export function useCrawlerController(targets: TargetItem[]) {
     };
   }, [status]);
 
-  // Process next target by calling the real Python Crawler API
-  const processNextTarget = useCallback(
-    async (index: number) => {
+  // Process targets in the pending queue
+  const runCrawlerQueue = useCallback(async () => {
+    if (targetsRef.current.length === 0) {
+      setStatus('COMPLETED');
+      setCurrentTargetName(null);
+      return;
+    }
+
+    isCancelledRef.current = false;
+    isPausedRef.current = false;
+    setStatus('RUNNING');
+
+    while (targetsRef.current.length > 0) {
       if (isCancelledRef.current) {
         setStatus('CANCELLED');
         setCurrentTargetName(null);
@@ -95,44 +112,23 @@ export function useCrawlerController(targets: TargetItem[]) {
         return;
       }
 
-      if (index >= targets.length) {
-        // All targets in scope completed
-        setStatus('COMPLETED');
-        setCurrentTargetName(null);
-        return;
-      }
-
-      const target = targets[index];
-      setCurrentTargetName(target.domain);
-      setCurrentIndex(index);
-
-      let discovered: ScrapedDataRecord[] = [];
+      const currentTarget = targetsRef.current[0];
+      setCurrentTargetName(currentTarget.domain);
 
       try {
-        // Execute the Python crawler via Next.js backend API
-        const response = await fetch('/api/crawler/run', {
+        await fetch('/api/crawler/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            domain: target.domain,
+            domain: currentTarget.domain,
             maxPages: 5,
             maxDepth: 2,
           }),
         });
-
-        const json = await response.json();
-
-        if (json.success && Array.isArray(json.records) && json.records.length > 0) {
-          discovered = json.records;
-        } else {
-          discovered = [];
-        }
       } catch (err) {
-        console.warn(`[Crawler] Network error crawling ${target.domain}:`, err);
-        discovered = [];
+        console.warn(`[Crawler] Network error crawling ${currentTarget.domain}:`, err);
       }
 
-      // Check cancellation/pause again before updating state
       if (isCancelledRef.current) {
         setStatus('CANCELLED');
         setCurrentTargetName(null);
@@ -145,53 +141,36 @@ export function useCrawlerController(targets: TargetItem[]) {
         const freshJson = await freshRes.json();
         if (freshJson.success && Array.isArray(freshJson.data)) {
           setScrapedResults(freshJson.data);
-        } else if (discovered.length > 0) {
-          setScrapedResults((prev) => {
-            const existingIds = new Set(prev.map((p) => p.id));
-            const uniqueNew = discovered.filter((d) => !existingIds.has(d.id));
-            return [...uniqueNew, ...prev];
-          });
         }
-      } catch {
-        if (discovered.length > 0) {
-          setScrapedResults((prev) => {
-            const existingIds = new Set(prev.map((p) => p.id));
-            const uniqueNew = discovered.filter((d) => !existingIds.has(d.id));
-            return [...uniqueNew, ...prev];
-          });
-        }
+      } catch (e) {}
+
+      // Remove the completed target from pending Queue so old targets don't linger
+      if (onTargetCompleted) {
+        onTargetCompleted(currentTarget.id);
       }
 
-      const nextIndex = index + 1;
-      setCurrentIndex(nextIndex);
+      // Brief delay for state transition
+      await new Promise((r) => setTimeout(r, 250));
 
       if (isPausedRef.current) {
         setStatus('PAUSED');
-      } else if (nextIndex < targets.length) {
-        processNextTarget(nextIndex);
-      } else {
-        setStatus('COMPLETED');
-        setCurrentTargetName(null);
+        return;
       }
-    },
-    [targets]
-  );
+    }
+
+    setStatus('COMPLETED');
+    setCurrentTargetName(null);
+  }, [onTargetCompleted]);
 
   // START CRAWLER
   const startCrawler = useCallback(() => {
-    if (targets.length === 0) {
+    if (targetsRef.current.length === 0) {
       alert('Target queue is empty. Please enter a domain in Manual Target Scope Entry before starting the crawler.');
       return;
     }
 
-    isCancelledRef.current = false;
-    isPausedRef.current = false;
-
-    setStatus('RUNNING');
-    setCurrentIndex(0);
-    setElapsedSeconds(0);
-    processNextTarget(0);
-  }, [targets, processNextTarget]);
+    runCrawlerQueue();
+  }, [runCrawlerQueue]);
 
   // PAUSE / STOP CRAWLER
   const pauseCrawler = useCallback(() => {
@@ -201,15 +180,14 @@ export function useCrawlerController(targets: TargetItem[]) {
 
   // RESUME CRAWLER
   const resumeCrawler = useCallback(() => {
-    if (currentIndex >= targets.length) {
+    if (targetsRef.current.length === 0) {
       setStatus('COMPLETED');
       return;
     }
     isPausedRef.current = false;
     isCancelledRef.current = false;
-    setStatus('RUNNING');
-    processNextTarget(currentIndex);
-  }, [currentIndex, targets.length, processNextTarget]);
+    runCrawlerQueue();
+  }, [runCrawlerQueue]);
 
   // CANCEL CRAWLER
   const cancelCrawler = useCallback(() => {
@@ -225,11 +203,8 @@ export function useCrawlerController(targets: TargetItem[]) {
       alert('Please pause or cancel the crawler before clearing results.');
       return;
     }
-    const confirmed = confirm('Are you sure you want to clear all scraped intelligence data?');
-    if (!confirmed) return;
 
     setScrapedResults([]);
-    setCurrentIndex(0);
     setElapsedSeconds(0);
     setStatus('IDLE');
     setCurrentTargetName(null);
@@ -241,20 +216,17 @@ export function useCrawlerController(targets: TargetItem[]) {
 
   // Derived statistics
   const totalTargets = targets.length;
-  const processedTargets = Math.min(currentIndex, totalTargets);
-  const progressPercent = totalTargets > 0 ? Math.round((processedTargets / totalTargets) * 100) : 0;
-
-  const uniqueSubdomains = new Set(scrapedResults.map((r) => r.subdomain)).size;
-  const uniqueEmails = new Set(scrapedResults.map((r) => r.email)).size;
+  const subdomainsTotal = scrapedResults.reduce((acc, curr) => acc + (curr.subdomains?.length || 0), 0);
+  const emailsTotal = scrapedResults.reduce((acc, curr) => acc + (curr.emails?.length || 0), 0);
   const uniqueCountries = new Set(scrapedResults.map((r) => r.country)).size;
 
   const stats: CrawlerStats = {
     totalTargets,
-    processedTargets,
-    subdomainsFound: uniqueSubdomains,
-    emailsFound: uniqueEmails,
+    processedTargets: 0,
+    subdomainsFound: subdomainsTotal,
+    emailsFound: emailsTotal,
     countriesFound: uniqueCountries,
-    progressPercent,
+    progressPercent: status === 'RUNNING' ? 50 : status === 'COMPLETED' ? 100 : 0,
     startedAt: null,
     elapsedSeconds,
     currentTargetName,

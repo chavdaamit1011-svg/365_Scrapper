@@ -48,11 +48,11 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       const domainKey = (r.domain || r.rootDomain || r.subdomain || 'unknown').toLowerCase().trim();
       const existing = map.get(domainKey);
 
-      // Collect all subdomains
+      // Collect all valid subdomains (excluding the root domain itself)
       const subList: string[] = [];
       if (Array.isArray(r.subdomains) && r.subdomains.length > 0) {
-        subList.push(...r.subdomains);
-      } else if (r.subdomain) {
+        subList.push(...r.subdomains.filter((s) => s && s.toLowerCase() !== domainKey));
+      } else if (r.subdomain && r.subdomain.toLowerCase() !== domainKey) {
         subList.push(r.subdomain);
       }
 

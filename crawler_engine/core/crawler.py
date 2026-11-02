@@ -176,8 +176,23 @@ class WebCrawler:
             except requests.exceptions.Timeout:
                 logger.warning(f"Timeout on {url} (Attempt {attempt}/{retries + 1})")
             except requests.exceptions.SSLError as ssl_err:
-                logger.warning(f"SSL Error on {url}: {ssl_err}")
-                break  # Don't retry unrecoverable SSL errors
+                logger.warning(f"SSL Error on {url}: {ssl_err}. Retrying with SSL verification bypassed...")
+                try:
+                    import urllib3
+                    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                    insecure_resp = requests.get(
+                        url,
+                        timeout=timeout,
+                        allow_redirects=True,
+                        verify=False,
+                        headers=self.session.headers,
+                    )
+                    ct = insecure_resp.headers.get("Content-Type", "").lower()
+                    if "text/html" in ct or "application/xhtml" in ct:
+                        return insecure_resp.text, insecure_resp.status_code, ct
+                except Exception as inner_e:
+                    logger.warning(f"Insecure SSL bypass failed on {url}: {inner_e}")
+                break
             except requests.exceptions.RequestException as req_err:
                 logger.warning(f"Request error on {url}: {req_err} (Attempt {attempt}/{retries + 1})")
 

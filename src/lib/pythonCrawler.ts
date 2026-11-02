@@ -113,49 +113,61 @@ export async function executeCrawlerOnDomain(
         const mongoose = await connectMongo();
         if (mongoose && mongoose.connection.readyState === 1) {
           const collection = mongoose.connection.collection('scraped_results');
-          const docs = await collection
-            .find({ $or: [{ domain: hostname }, { subdomain: hostname }] })
+          let docs = await collection
+            .find({
+              $or: [
+                { domain: hostname },
+                { rootDomain: hostname },
+                { subdomain: hostname },
+                { id: `domain_${hostname}` },
+              ],
+            })
             .sort({ _id: -1 })
-            .limit(100)
+            .limit(10)
             .toArray();
 
+          // Quick retry if MongoDB write batch was still flushing
+          if (!docs || docs.length === 0) {
+            await new Promise((r) => setTimeout(r, 400));
+            docs = await collection
+              .find({
+                $or: [
+                  { domain: hostname },
+                  { rootDomain: hostname },
+                  { id: `domain_${hostname}` },
+                ],
+              })
+              .sort({ _id: -1 })
+              .limit(10)
+              .toArray();
+          }
+
           if (docs && docs.length > 0) {
-            records = docs.map((d: any) => ({
-              id: d.id || String(d._id),
-              domain: d.domain || hostname,
-              rootDomain: d.rootDomain || d.domain || hostname,
-              subdomain: d.subdomain || hostname,
-              subdomains: Array.isArray(d.subdomains) ? d.subdomains : [],
-              subdomainCount: typeof d.subdomainCount === 'number' ? d.subdomainCount : (d.subdomains ? d.subdomains.length : 0),
-              email: d.email || (Array.isArray(d.emails) && d.emails[0]) || '',
-              emails: Array.isArray(d.emails) ? d.emails : [],
-              emailCount: typeof d.emailCount === 'number' ? d.emailCount : (d.emails ? d.emails.length : 0),
-              country: d.country || 'Detected',
-              countryCode: d.countryCode || 'INT',
-              countryFlag: d.countryFlag || '🌐',
-              status: d.status || 'RESOLVED',
-              pagesCrawled: d.pagesCrawled || 0,
-              discoveredAt: d.discoveredAt || new Date().toISOString(),
-            }));
+            records = docs.map((d: any) => {
+              const subs = Array.isArray(d.subdomains) ? d.subdomains : [];
+              const ems = Array.isArray(d.emails) ? d.emails : (d.email ? [d.email] : []);
+              return {
+                id: d.id || String(d._id),
+                domain: d.domain || hostname,
+                rootDomain: d.rootDomain || d.domain || hostname,
+                subdomain: d.subdomain || hostname,
+                subdomains: subs,
+                subdomainCount: typeof d.subdomainCount === 'number' ? d.subdomainCount : subs.length,
+                email: d.email || ems[0] || '',
+                emails: ems,
+                emailCount: typeof d.emailCount === 'number' ? d.emailCount : ems.length,
+                country: d.country || 'Detected',
+                countryCode: d.countryCode || 'INT',
+                countryFlag: d.countryFlag || '🌐',
+                status: d.status || 'RESOLVED',
+                pagesCrawled: d.pagesCrawled || 0,
+                discoveredAt: d.discoveredAt || new Date().toISOString(),
+              };
+            });
           }
         }
       } catch (err) {
         console.warn('[CrawlerRunner] Could not query MongoDB after crawl:', err);
-      }
-
-      // If still empty (e.g. target site had 0 emails/subdomains), ensure base record with actual scraped status
-      if (records.length === 0 && code === 0) {
-        records.push({
-          id: `crawl_${Date.now()}`,
-          domain: hostname,
-          subdomain: hostname,
-          email: '',
-          country: 'Detected',
-          countryCode: 'INT',
-          countryFlag: '🌐',
-          status: 'RESOLVED',
-          discoveredAt: new Date().toISOString(),
-        });
       }
 
       resolve({

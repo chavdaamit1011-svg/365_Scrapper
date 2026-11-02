@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -46,8 +46,18 @@ export default function DashboardPage() {
   // View mode switcher: 'results' (Scraped Intelligence) vs 'queue' (Target Scope Queue)
   const [dataViewMode, setDataViewMode] = useState<'results' | 'queue'>('results');
 
+  const handleTargetCompleted = useCallback((targetId: string) => {
+    setTargets((prev) => {
+      const updated = prev.filter((t) => t.id !== targetId);
+      try {
+        localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
+      } catch (e) {}
+      return updated;
+    });
+  }, []);
+
   // Crawler Controller Hook
-  const crawler = useCrawlerController(targets);
+  const crawler = useCrawlerController(targets, handleTargetCompleted);
 
   // Determine whether crawler is actively working or paused
   const isScrapingActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
@@ -148,7 +158,18 @@ export default function DashboardPage() {
   };
 
   const handleAddAndStart = (newItems: TargetItem[]) => {
-    handleAddTargets(newItems);
+    if (crawler.status === 'RUNNING' || crawler.status === 'PAUSED') {
+      // Crawler is already working on another domain: append new target(s) to the pending Queue
+      handleAddTargets(newItems);
+      return;
+    }
+
+    // Crawler is IDLE: only queue the new item(s) to be crawled right now (do not keep old completed targets)
+    setTargets(newItems);
+    try {
+      localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(newItems));
+    } catch (e) {}
+
     setTimeout(() => {
       crawler.startCrawler();
     }, 120);
