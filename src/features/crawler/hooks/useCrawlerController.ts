@@ -19,6 +19,16 @@ export function useCrawlerController(
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [currentTargetName, setCurrentTargetName] = useState<string | null>(null);
 
+  // Granular session and active target telemetry state
+  const [sessionTotal, setSessionTotal] = useState<number>(0);
+  const [processedTargetsCount, setProcessedTargetsCount] = useState<number>(0);
+  const [activePhase, setActivePhase] = useState<string>('Standby');
+  const [targetSubProgress, setTargetSubProgress] = useState<number>(0);
+  const [activeTargetResult, setActiveTargetResult] = useState<{
+    subdomains: number;
+    emails: number;
+  } | null>(null);
+
   const targetsRef = useRef<TargetItem[]>(targets);
   useEffect(() => {
     targetsRef.current = targets;
@@ -100,20 +110,44 @@ export function useCrawlerController(
     isPausedRef.current = false;
     setStatus('RUNNING');
 
+    // Record session batch total if not set
+    const initialBatchCount = targetsRef.current.length;
+    setSessionTotal((prev) => (prev > 0 ? prev : initialBatchCount));
+
     while (targetsRef.current.length > 0) {
       if (isCancelledRef.current) {
         setStatus('CANCELLED');
         setCurrentTargetName(null);
+        setActivePhase('Crawl Cancelled');
         return;
       }
 
       if (isPausedRef.current) {
         setStatus('PAUSED');
+        setActivePhase('Crawler Paused');
         return;
       }
 
       const currentTarget = targetsRef.current[0];
       setCurrentTargetName(currentTarget.domain);
+      setActivePhase('OSINT Recon & Certificate Discovery');
+      setTargetSubProgress(20);
+      setActiveTargetResult(null);
+
+      // Simulated phases for smooth live telemetry while backend executes
+      const phaseTimer1 = setTimeout(() => {
+        if (!isCancelledRef.current && !isPausedRef.current) {
+          setActivePhase('Deep Web Crawling & Link Traversal');
+          setTargetSubProgress(55);
+        }
+      }, 2500);
+
+      const phaseTimer2 = setTimeout(() => {
+        if (!isCancelledRef.current && !isPausedRef.current) {
+          setActivePhase('Data Validation & MongoDB Sync');
+          setTargetSubProgress(85);
+        }
+      }, 7000);
 
       try {
         await fetch('/api/crawler/run', {
@@ -127,7 +161,13 @@ export function useCrawlerController(
         });
       } catch (err) {
         console.warn(`[Crawler] Network error crawling ${currentTarget.domain}:`, err);
+      } finally {
+        clearTimeout(phaseTimer1);
+        clearTimeout(phaseTimer2);
       }
+
+      setTargetSubProgress(100);
+      setActivePhase('Target Scrape Completed');
 
       if (isCancelledRef.current) {
         setStatus('CANCELLED');
@@ -141,8 +181,32 @@ export function useCrawlerController(
         const freshJson = await freshRes.json();
         if (freshJson.success && Array.isArray(freshJson.data)) {
           setScrapedResults(freshJson.data);
+
+          // Find this specific target record to get its exact subdomains and emails
+          const matched = freshJson.data.find((r: ScrapedDataRecord) => {
+            const d1 = (r.domain || r.rootDomain || '').toLowerCase().trim();
+            const d2 = currentTarget.domain.toLowerCase().trim();
+            return d1 === d2 || d1.includes(d2) || d2.includes(d1);
+          });
+
+          if (matched) {
+            const subs = Array.isArray(matched.subdomains)
+              ? matched.subdomains.filter((s: string) => s.toLowerCase() !== matched.domain.toLowerCase())
+              : [];
+            const ems = Array.isArray(matched.emails)
+              ? matched.emails
+              : (matched.email ? [matched.email] : []);
+
+            setActiveTargetResult({
+              subdomains: subs.length,
+              emails: ems.length,
+            });
+          }
         }
       } catch (e) {}
+
+      // Increment processed targets count
+      setProcessedTargetsCount((prev) => prev + 1);
 
       // Remove the completed target from pending Queue immediately
       targetsRef.current = targetsRef.current.filter((t) => t.id !== currentTarget.id);
@@ -151,7 +215,7 @@ export function useCrawlerController(
       }
 
       // Brief delay for state transition
-      await new Promise((r) => setTimeout(r, 250));
+      await new Promise((r) => setTimeout(r, 300));
 
       if (isPausedRef.current) {
         setStatus('PAUSED');
@@ -160,7 +224,7 @@ export function useCrawlerController(
     }
 
     setStatus('COMPLETED');
-    setCurrentTargetName(null);
+    setActivePhase('All Targets Crawled Successfully');
   }, [onTargetCompleted]);
 
   // START CRAWLER
@@ -170,6 +234,9 @@ export function useCrawlerController(
       return;
     }
 
+    setSessionTotal(targetsRef.current.length);
+    setProcessedTargetsCount(0);
+    setActiveTargetResult(null);
     runCrawlerQueue();
   }, [runCrawlerQueue]);
 
@@ -177,6 +244,7 @@ export function useCrawlerController(
   const pauseCrawler = useCallback(() => {
     isPausedRef.current = true;
     setStatus('PAUSED');
+    setActivePhase('Crawler Paused');
   }, []);
 
   // RESUME CRAWLER
@@ -196,6 +264,7 @@ export function useCrawlerController(
     isPausedRef.current = false;
     setStatus('CANCELLED');
     setCurrentTargetName(null);
+    setActivePhase('Crawl Cancelled');
   }, []);
 
   // CLEAR RESULTS
@@ -207,6 +276,11 @@ export function useCrawlerController(
 
     setScrapedResults([]);
     setElapsedSeconds(0);
+    setSessionTotal(0);
+    setProcessedTargetsCount(0);
+    setActiveTargetResult(null);
+    setActivePhase('Standby');
+    setTargetSubProgress(0);
     setStatus('IDLE');
     setCurrentTargetName(null);
     try {
@@ -215,22 +289,52 @@ export function useCrawlerController(
     } catch (e) {}
   }, [status]);
 
-  // Derived statistics
-  const totalTargets = targets.length;
-  const subdomainsTotal = scrapedResults.reduce((acc, curr) => acc + (curr.subdomains?.length || 0), 0);
-  const emailsTotal = scrapedResults.reduce((acc, curr) => acc + (curr.emails?.length || 0), 0);
-  const uniqueCountries = new Set(scrapedResults.map((r) => r.country)).size;
+  // Derived statistics with realistic dynamic progress & separated metrics
+  const effectiveTotal = Math.max(sessionTotal, targets.length, processedTargetsCount, 1);
+  const targetWeight = 100 / effectiveTotal;
+  const baseProgress = (processedTargetsCount / effectiveTotal) * 100;
+  const activeContribution = (targetSubProgress / 100) * targetWeight;
+
+  let dynamicProgress = 0;
+  if (status === 'COMPLETED') {
+    dynamicProgress = 100;
+  } else if (status === 'RUNNING') {
+    dynamicProgress = Math.min(99, Math.max(12, Math.round(baseProgress + activeContribution)));
+  } else if (status === 'PAUSED') {
+    dynamicProgress = Math.round(baseProgress);
+  }
+
+  // Database lifetime totals (across all domains)
+  const databaseTotalDomains = scrapedResults.length;
+  const databaseTotalSubdomains = scrapedResults.reduce((acc, curr) => {
+    if (Array.isArray(curr.subdomains)) {
+      return acc + curr.subdomains.filter((s) => s.toLowerCase() !== curr.domain.toLowerCase()).length;
+    }
+    return acc + (curr.subdomainCount || 0);
+  }, 0);
+  const databaseTotalEmails = scrapedResults.reduce(
+    (acc, curr) => acc + (curr.emails?.length || (curr.email ? 1 : 0)),
+    0
+  );
+  const databaseTotalCountries = new Set(scrapedResults.map((r) => r.country).filter(Boolean)).size;
 
   const stats: CrawlerStats = {
-    totalTargets,
-    processedTargets: 0,
-    subdomainsFound: subdomainsTotal,
-    emailsFound: emailsTotal,
-    countriesFound: uniqueCountries,
-    progressPercent: status === 'RUNNING' ? 50 : status === 'COMPLETED' ? 100 : 0,
+    totalTargets: effectiveTotal,
+    processedTargets: status === 'COMPLETED' ? effectiveTotal : processedTargetsCount,
+    subdomainsFound: databaseTotalSubdomains,
+    emailsFound: databaseTotalEmails,
+    countriesFound: databaseTotalCountries,
+    progressPercent: dynamicProgress,
     startedAt: null,
     elapsedSeconds,
     currentTargetName,
+    activeTargetPhase: activePhase,
+    activeTargetSubdomains: activeTargetResult ? activeTargetResult.subdomains : null,
+    activeTargetEmails: activeTargetResult ? activeTargetResult.emails : null,
+    databaseTotalDomains,
+    databaseTotalSubdomains,
+    databaseTotalEmails,
+    databaseTotalCountries,
   };
 
   return {

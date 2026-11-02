@@ -298,7 +298,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
             fontSize: '12px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)', flexWrap: 'wrap' }}>
             <span style={{ fontWeight: 600, color: 'var(--text-main)' }}>
               {stats.progressPercent}% Completed
             </span>
@@ -313,6 +313,21 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                   Scanning: {stats.currentTargetName}
                 </span>
               </>
+            )}
+            {stats.activeTargetPhase && (
+              <span
+                style={{
+                  fontSize: '11px',
+                  background: '#e0f2fe',
+                  color: '#0369a1',
+                  padding: '2px 8px',
+                  borderRadius: '6px',
+                  fontWeight: 600,
+                  border: '1px solid #bae6fd',
+                }}
+              >
+                {stats.activeTargetPhase}
+              </span>
             )}
           </div>
 
@@ -342,7 +357,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 ? '#10b981'
                 : 'linear-gradient(90deg, #0284c7, #38bdf8)',
               borderRadius: '9999px',
-              transition: 'width 0.3s ease-in-out',
+              transition: 'width 0.4s ease-in-out',
             }}
           />
         </div>
@@ -388,15 +403,22 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Target Scope
+              Session Target Scope
             </div>
             <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>
               {stats.processedTargets} / {stats.totalTargets}
             </div>
+            <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
+              {status === 'COMPLETED'
+                ? 'All Targets Processed'
+                : status === 'RUNNING'
+                ? `${Math.max(0, stats.totalTargets - stats.processedTargets)} Remaining`
+                : 'Ready in Queue'}
+            </div>
           </div>
         </div>
 
-        {/* Metric 2: Subdomains Found */}
+        {/* Metric 2: Active Target Subdomains */}
         <div
           style={{
             display: 'flex',
@@ -425,15 +447,35 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Subdomains Found
+              Active Target Subdomains
             </div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>
-              {stats.subdomainsFound}
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#7c3aed' }}>
+              {status === 'RUNNING' && (stats.activeTargetSubdomains === null || stats.activeTargetSubdomains === undefined)
+                ? 'Discovering...'
+                : stats.activeTargetSubdomains !== null && stats.activeTargetSubdomains !== undefined
+                ? `${stats.activeTargetSubdomains} Found`
+                : status === 'COMPLETED'
+                ? `${stats.activeTargetSubdomains ?? 0} Discovered`
+                : '-'}
+            </div>
+            <div
+              style={{
+                fontSize: '10.5px',
+                color: 'var(--text-muted)',
+                marginTop: '1px',
+                maxWidth: '140px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={stats.currentTargetName || 'Active Target'}
+            >
+              {stats.currentTargetName ? stats.currentTargetName : 'Scope Standby'}
             </div>
           </div>
         </div>
 
-        {/* Metric 3: Emails Extracted */}
+        {/* Metric 3: Active Target Emails */}
         <div
           style={{
             display: 'flex',
@@ -462,15 +504,24 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Emails Extracted
+              Active Target Emails
             </div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>
-              {stats.emailsFound}
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#d97706' }}>
+              {status === 'RUNNING' && (stats.activeTargetEmails === null || stats.activeTargetEmails === undefined)
+                ? 'Extracting...'
+                : stats.activeTargetEmails !== null && stats.activeTargetEmails !== undefined
+                ? `${stats.activeTargetEmails} Verified`
+                : status === 'COMPLETED'
+                ? `${stats.activeTargetEmails ?? 0} Verified`
+                : '-'}
+            </div>
+            <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '1px' }}>
+              Legitimate verified
             </div>
           </div>
         </div>
 
-        {/* Metric 4: Countries Mapped */}
+        {/* Metric 4: Total Database Intelligence */}
         <div
           style={{
             display: 'flex',
@@ -499,10 +550,13 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Countries Mapped
+              Database Total Intelligence
             </div>
-            <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>
-              {stats.countriesFound}
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#15803d' }}>
+              {stats.databaseTotalSubdomains ?? stats.subdomainsFound} Subs • {stats.databaseTotalEmails ?? stats.emailsFound} Emails
+            </div>
+            <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '1px' }}>
+              Across {stats.databaseTotalDomains ?? 1} Saved Domains
             </div>
           </div>
         </div>

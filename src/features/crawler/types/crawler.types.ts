@@ -31,5 +31,12 @@ export interface CrawlerStats {
   startedAt: string | null;
   elapsedSeconds: number;
   currentTargetName: string | null;
+  activeTargetPhase?: string;
+  activeTargetSubdomains?: number | null;
+  activeTargetEmails?: number | null;
+  databaseTotalDomains?: number;
+  databaseTotalSubdomains?: number;
+  databaseTotalEmails?: number;
+  databaseTotalCountries?: number;
 }
 
