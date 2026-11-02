@@ -444,22 +444,43 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               >
                                 {subdomains.length} Subdomains
                               </span>
-                              {subdomains.slice(0, 2).map((sub) => (
-                                <span
-                                  key={sub}
-                                  style={{
-                                    fontSize: '11.5px',
-                                    fontWeight: 500,
-                                    padding: '2px 7px',
-                                    borderRadius: '5px',
-                                    background: '#f1f5f9',
-                                    color: '#334155',
-                                    border: '1px solid #e2e8f0',
-                                  }}
-                                >
-                                  {sub}
-                                </span>
-                              ))}
+                              {subdomains.slice(0, 2).map((sub) => {
+                                const targetUrl = sub.startsWith('http') ? sub : `https://${sub}`;
+                                return (
+                                  <a
+                                    key={sub}
+                                    href={targetUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={`Open ${targetUrl} in new tab`}
+                                    style={{
+                                      fontSize: '11.5px',
+                                      fontWeight: 500,
+                                      padding: '2px 7px',
+                                      borderRadius: '5px',
+                                      background: '#f1f5f9',
+                                      color: '#0369a1',
+                                      border: '1px solid #e2e8f0',
+                                      textDecoration: 'none',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      transition: 'all 0.15s ease',
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.currentTarget.style.background = '#e0f2fe';
+                                      e.currentTarget.style.borderColor = '#bae6fd';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                      e.currentTarget.style.background = '#f1f5f9';
+                                      e.currentTarget.style.borderColor = '#e2e8f0';
+                                    }}
+                                  >
+                                    <span>{sub}</span>
+                                    <ExternalLink size={10} color="#0284c7" />
+                                  </a>
+                                );
+                              })}
                               {subdomains.length > 2 && (
                                 <button
                                   type="button"
@@ -605,39 +626,46 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </p>
                               ) : (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                  {subdomains.map((sub) => (
-                                    <div
-                                      key={sub}
-                                      style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        padding: '4px 10px',
-                                        borderRadius: '6px',
-                                        background: '#f8fafc',
-                                        border: '1px solid #cbd5e1',
-                                        fontSize: '12px',
-                                        color: '#1e293b',
-                                        fontWeight: 500,
-                                      }}
-                                    >
-                                      <span>{sub}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleCopy(sub, `${r.id}_sub_${sub}`)}
-                                        title="Copy subdomain"
+                                  {subdomains.map((sub) => {
+                                    const targetUrl = sub.startsWith('http') ? sub : `https://${sub}`;
+                                    return (
+                                      <a
+                                        key={sub}
+                                        href={targetUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title={`Redirect to ${targetUrl}`}
                                         style={{
-                                          background: 'none',
-                                          border: 'none',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '6px',
+                                          padding: '5px 10px',
+                                          borderRadius: '6px',
+                                          background: '#f8fafc',
+                                          border: '1px solid #cbd5e1',
+                                          fontSize: '12px',
+                                          color: '#0369a1',
+                                          fontWeight: 600,
+                                          textDecoration: 'none',
                                           cursor: 'pointer',
-                                          padding: 0,
-                                          color: copiedId === `${r.id}_sub_${sub}` ? '#10b981' : '#94a3b8',
+                                          transition: 'all 0.15s ease',
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.currentTarget.style.background = '#e0f2fe';
+                                          e.currentTarget.style.borderColor = '#7dd3fc';
+                                          e.currentTarget.style.color = '#0284c7';
+                                        }}
+                                        onMouseLeave={(e) => {
+                                          e.currentTarget.style.background = '#f8fafc';
+                                          e.currentTarget.style.borderColor = '#cbd5e1';
+                                          e.currentTarget.style.color = '#0369a1';
                                         }}
                                       >
-                                        {copiedId === `${r.id}_sub_${sub}` ? <Check size={12} /> : <Copy size={12} />}
-                                      </button>
-                                    </div>
-                                  ))}
+                                        <span>{sub}</span>
+                                        <ExternalLink size={12} style={{ flexShrink: 0 }} />
+                                      </a>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
