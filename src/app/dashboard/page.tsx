@@ -20,7 +20,7 @@ import { SpatialSidebar, NavTab } from '@/features/dashboard/components/SpatialS
 import { UserListTable } from '@/features/users/components/UserListTable';
 import { CreateUserModal } from '@/features/users/components/CreateUserModal';
 import { TargetInputCard } from '@/features/targets/components/TargetInputCard';
-import { BulkTargetUploader } from '@/features/targets/components/BulkTargetUploader';
+import { BulkUploadModal } from '@/features/targets/components/BulkUploadModal';
 import { TargetQueueTable } from '@/features/targets/components/TargetQueueTable';
 import { TargetItem } from '@/features/targets/types/target.types';
 import { CrawlerControlBar } from '@/features/crawler/components/CrawlerControlBar';
@@ -42,6 +42,7 @@ export default function DashboardPage() {
 
   // Target Scope Ingestion State
   const [targets, setTargets] = useState<TargetItem[]>([]);
+  const [isBulkModalOpen, setIsBulkModalOpen] = useState(false);
 
   // View mode switcher: 'results' (Scraped Intelligence) vs 'queue' (Target Scope Queue)
   const [dataViewMode, setDataViewMode] = useState<'results' | 'queue'>('results');
@@ -267,39 +268,65 @@ export default function DashboardPage() {
           paddingRight: '6px',
         }}
       >
-        {/* Top Status & Telemetry Bar */}
+        {/* Sleek Executive Top Header */}
         <Card style={{ padding: '16px 22px' }}>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span className="pulse-dot" />
-                <span style={{ fontSize: '12px', fontWeight: 700, color: '#0369a1' }}>
-                  ENGINE GATEWAY: ONLINE
-                </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                  <h1 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', margin: 0, letterSpacing: '-0.3px' }}>
+                    Autonomous OSINT & Web Intelligence
+                  </h1>
+                  <span
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '5px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: '#0369a1',
+                      background: '#e0f2fe',
+                      padding: '2px 8px',
+                      borderRadius: '9999px',
+                      border: '1px solid #bae6fd',
+                    }}
+                  >
+                    <span className="pulse-dot" style={{ width: '6px', height: '6px' }} />
+                    Live Engine
+                  </span>
+                </div>
+                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, marginTop: '2px' }}>
+                  Domain scope ingestion, certificate recon, deep web crawling & verified contact extraction.
+                </p>
               </div>
-              <span style={{ color: '#cbd5e1' }}>|</span>
-              <span className="telemetry-tag">PORT: 3131</span>
-              <span className="telemetry-tag">
-                <Target size={12} color="#0284c7" /> TARGET SCOPE: {targets.length} QUEUED
-              </span>
-              <span className="telemetry-tag">
-                <Zap size={12} color="#10b981" /> INTELLIGENCE: {crawler.scrapedResults.length} EXTRACTED
-              </span>
-              <span className="telemetry-tag">
-                <Database size={12} color="#0284c7" /> MONGODB: the_scraper
-              </span>
-              <span className="telemetry-tag">
-                <ShieldCheck size={12} color="#10b981" /> 60s OTP PROTOCOL
-              </span>
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  fontSize: '12px',
+                  fontWeight: 600,
+                  color: '#15803d',
+                  background: '#f0fdf4',
+                  padding: '6px 12px',
+                  borderRadius: '8px',
+                  border: '1px solid #bbf7d0',
+                }}
+              >
+                <Database size={13} color="#15803d" />
+                <span>MongoDB: the_scraper</span>
+              </div>
+
               <Button
                 variant="secondary"
                 size="sm"
                 onClick={fetchUsers}
                 isLoading={isLoadingUsers}
                 leftIcon={<RefreshCw size={13} />}
+                title="Sync database and users"
               >
                 Sync Database
               </Button>
@@ -310,19 +337,21 @@ export default function DashboardPage() {
         {/* Tab 1: Target Ingestion & Autonomous Crawler Engine */}
         {activeTab === 'targets' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* Top Row: Target Input Cards (Manual Domain/Subdomain + Bulk File Uploader) */}
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '20px' }}>
-              <TargetInputCard
-                onAddTargets={handleAddTargets}
-                existingTargets={targets}
-                onAddAndStart={handleAddAndStart}
-              />
+            {/* Top Row: Full-Width Manual Target Scope Entry with In-Card Bulk Modal Button */}
+            <TargetInputCard
+              onAddTargets={handleAddTargets}
+              existingTargets={targets}
+              onAddAndStart={handleAddAndStart}
+              onOpenBulkModal={() => setIsBulkModalOpen(true)}
+            />
 
-              <BulkTargetUploader
-                onAddTargets={handleAddTargets}
-                existingTargets={targets}
-              />
-            </div>
+            {/* Bulk Upload Modal Dialog */}
+            <BulkUploadModal
+              isOpen={isBulkModalOpen}
+              onClose={() => setIsBulkModalOpen(false)}
+              onAddTargets={handleAddTargets}
+              existingTargets={targets}
+            />
 
             {/* Middle: Crawler Engine Command Center - ONLY SHOWN WHEN SCRAPING IS ACTIVE */}
             <AnimatePresence>
@@ -355,59 +384,91 @@ export default function DashboardPage() {
                 style={{
                   display: 'inline-flex',
                   alignItems: 'center',
-                  background: '#e2e8f0',
+                  background: '#f1f5f9',
                   padding: '4px',
                   borderRadius: '10px',
                   gap: '4px',
+                  border: '1px solid #e2e8f0',
+                  position: 'relative',
                 }}
               >
-                <motion.button
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.98 }}
+                <button
+                  type="button"
                   onClick={() => setDataViewMode('results')}
                   style={{
+                    position: 'relative',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    padding: '8px 16px',
+                    padding: '8px 18px',
                     borderRadius: '7px',
                     fontSize: '13px',
                     fontWeight: 600,
                     border: 'none',
                     cursor: 'pointer',
-                    background: dataViewMode === 'results' ? '#ffffff' : 'transparent',
+                    background: 'transparent',
                     color: dataViewMode === 'results' ? '#0284c7' : '#64748b',
-                    boxShadow: dataViewMode === 'results' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
-                    transition: 'background 0.15s ease, color 0.15s ease',
+                    outline: 'none',
+                    zIndex: 1,
+                    transition: 'color 0.2s ease',
                   }}
                 >
-                  <Zap size={15} />
-                  Scraped Intelligence ({crawler.scrapedResults.length})
-                </motion.button>
+                  {dataViewMode === 'results' && (
+                    <motion.div
+                      layoutId="activeViewTabPill"
+                      transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        background: '#ffffff',
+                        borderRadius: '7px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+                        zIndex: -1,
+                      }}
+                    />
+                  )}
+                  <Zap size={15} color={dataViewMode === 'results' ? '#0284c7' : '#64748b'} />
+                  <span>Scraped Intelligence ({crawler.scrapedResults.length})</span>
+                </button>
 
-                <motion.button
-                  whileHover={{ scale: 1.01 }}
-                  whileTap={{ scale: 0.98 }}
+                <button
+                  type="button"
                   onClick={() => setDataViewMode('queue')}
                   style={{
+                    position: 'relative',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    padding: '8px 16px',
+                    padding: '8px 18px',
                     borderRadius: '7px',
                     fontSize: '13px',
                     fontWeight: 600,
                     border: 'none',
                     cursor: 'pointer',
-                    background: dataViewMode === 'queue' ? '#ffffff' : 'transparent',
+                    background: 'transparent',
                     color: dataViewMode === 'queue' ? '#0284c7' : '#64748b',
-                    boxShadow: dataViewMode === 'queue' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
-                    transition: 'background 0.15s ease, color 0.15s ease',
+                    outline: 'none',
+                    zIndex: 1,
+                    transition: 'color 0.2s ease',
                   }}
                 >
-                  <Layers size={15} />
-                  Target Scope Queue ({targets.length})
-                </motion.button>
+                  {dataViewMode === 'queue' && (
+                    <motion.div
+                      layoutId="activeViewTabPill"
+                      transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        background: '#ffffff',
+                        borderRadius: '7px',
+                        boxShadow: '0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.04)',
+                        zIndex: -1,
+                      }}
+                    />
+                  )}
+                  <Layers size={15} color={dataViewMode === 'queue' ? '#0284c7' : '#64748b'} />
+                  <span>Target Scope Queue ({targets.length})</span>
+                </button>
               </div>
 
               {/* Start Crawler Trigger & Status Pill */}

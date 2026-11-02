@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Globe, Plus, AlertCircle, CheckCircle2, Play } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Globe, Plus, AlertCircle, CheckCircle2, Play, FileSpreadsheet } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { TargetItem } from '../types/target.types';
@@ -11,12 +12,14 @@ interface TargetInputCardProps {
   onAddTargets: (targets: TargetItem[]) => void;
   existingTargets: TargetItem[];
   onAddAndStart?: (targets: TargetItem[]) => void;
+  onOpenBulkModal?: () => void;
 }
 
 export const TargetInputCard: React.FC<TargetInputCardProps> = ({
   onAddTargets,
   existingTargets,
   onAddAndStart,
+  onOpenBulkModal,
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -101,34 +104,67 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
 
   return (
     <Card style={{ padding: '22px' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-        <div
-          style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '8px',
-            background: '#e0f2fe',
-            color: '#0284c7',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Globe size={18} />
+      {/* Header Row: Title & Bulk Upload Modal Button */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: '12px',
+          marginBottom: '14px',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div
+            style={{
+              width: '34px',
+              height: '34px',
+              borderRadius: '8px',
+              background: '#e0f2fe',
+              color: '#0284c7',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Globe size={18} />
+          </div>
+          <div>
+            <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>
+              Manual Target Scope Entry
+            </h3>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              Enter single or multiple domains/subdomains separated by comma or space
+            </span>
+          </div>
         </div>
-        <div>
-          <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>
-            Manual Target Scope Entry
-          </h3>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Enter single or multiple domains/subdomains separated by comma or space
-          </span>
-        </div>
+
+        {onOpenBulkModal && (
+          <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={onOpenBulkModal}
+              leftIcon={<FileSpreadsheet size={15} color="#10b981" />}
+              style={{
+                fontWeight: 600,
+                borderColor: '#cbd5e1',
+                background: '#ffffff',
+              }}
+            >
+              Bulk Ingestion (CSV / Excel)
+            </Button>
+          </motion.div>
+        )}
       </div>
 
-      <form onSubmit={handleAdd} style={{ marginTop: '14px' }}>
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-          <div style={{ flex: 1, minWidth: '240px', position: 'relative' }}>
+      {/* Spacious Full-Width Search & Ingestion Input Row */}
+      <form onSubmit={handleAdd}>
+        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <div style={{ flex: 1, minWidth: '280px', position: 'relative' }}>
             <input
               type="text"
               placeholder="e.g. example.com, api.target.org, dev.portal.net"
@@ -139,33 +175,40 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
               }}
               className="spatial-input"
               style={{
-                fontSize: '13px',
-                padding: '10px 14px',
+                fontSize: '13.5px',
+                padding: '11px 16px',
                 width: '100%',
+                borderRadius: '8px',
               }}
             />
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Button
-              type="submit"
-              variant="secondary"
-              size="md"
-              leftIcon={<Plus size={15} />}
-            >
-              Add Target
-            </Button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexShrink: 0 }}>
+            <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+              <Button
+                type="submit"
+                variant="secondary"
+                size="md"
+                leftIcon={<Plus size={15} />}
+                style={{ padding: '10px 18px', fontWeight: 600 }}
+              >
+                Add Target
+              </Button>
+            </motion.div>
 
             {onAddAndStart && (
-              <Button
-                type="button"
-                variant="primary"
-                size="md"
-                onClick={handleAddAndStart}
-                leftIcon={<Play size={14} fill="currentColor" />}
-              >
-                Add & Crawl Now
-              </Button>
+              <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
+                <Button
+                  type="button"
+                  variant="primary"
+                  size="md"
+                  onClick={handleAddAndStart}
+                  leftIcon={<Play size={14} fill="currentColor" />}
+                  style={{ padding: '10px 20px', fontWeight: 600 }}
+                >
+                  Add & Crawl Now
+                </Button>
+              </motion.div>
             )}
           </div>
         </div>

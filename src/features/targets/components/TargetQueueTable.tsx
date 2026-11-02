@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { motion } from 'framer-motion';
 import { Search, Trash2, Copy, Check, Globe, FileSpreadsheet, ListFilter, Download, Play } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -143,8 +144,18 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
           />
         </div>
 
-        {/* Type Filter Buttons */}
-        <div style={{ display: 'flex', gap: '6px' }}>
+        {/* Type Filter Buttons with Smooth Animated Sliding Indicator */}
+        <div
+          style={{
+            display: 'flex',
+            gap: '4px',
+            background: '#f1f5f9',
+            padding: '3px',
+            borderRadius: '8px',
+            border: '1px solid #e2e8f0',
+            position: 'relative',
+          }}
+        >
           {(
             [
               { id: 'all', label: `All (${targets.length})` },
@@ -157,17 +168,34 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
               type="button"
               onClick={() => setFilterType(btn.id)}
               style={{
-                padding: '6px 12px',
+                position: 'relative',
+                padding: '6px 14px',
                 borderRadius: '6px',
                 fontSize: '11.5px',
                 fontWeight: 600,
-                border: '1px solid #e2e8f0',
-                background: filterType === btn.id ? '#0284c7' : '#ffffff',
-                color: filterType === btn.id ? '#ffffff' : '#64748b',
+                border: 'none',
+                background: 'transparent',
+                color: filterType === btn.id ? '#0284c7' : '#64748b',
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
+                zIndex: 1,
+                outline: 'none',
+                transition: 'color 0.18s ease',
               }}
             >
+              {filterType === btn.id && (
+                <motion.div
+                  layoutId="queueFilterTabPill"
+                  transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                  style={{
+                    position: 'absolute',
+                    inset: 0,
+                    background: '#ffffff',
+                    borderRadius: '6px',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                    zIndex: -1,
+                  }}
+                />
+              )}
               {btn.label}
             </button>
           ))}

@@ -176,8 +176,8 @@ export const SpatialSidebar: React.FC<SpatialSidebarProps> = ({
           </div>
         )}
 
-        {/* Navigation Items */}
-        <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        {/* Navigation Items with Framer Motion layoutId */}
+        <nav style={{ display: 'flex', flexDirection: 'column', gap: '4px', position: 'relative' }}>
           {navItems.map((item) => {
             const isActive = activeTab === item.id;
 
@@ -187,16 +187,16 @@ export const SpatialSidebar: React.FC<SpatialSidebarProps> = ({
                 type="button"
                 whileHover={{ x: 2 }}
                 whileTap={{ scale: 0.98 }}
-                transition={{ type: 'spring', stiffness: 450, damping: 25 }}
                 onClick={() => onTabChange(item.id)}
                 style={{
+                  position: 'relative',
                   display: 'flex',
                   alignItems: 'center',
                   gap: '10px',
-                  padding: isCollapsed ? '10px' : '8px 12px',
+                  padding: isCollapsed ? '10px' : '9px 12px',
                   borderRadius: '8px',
                   border: 'none',
-                  background: isActive ? '#f0f9ff' : 'transparent',
+                  background: 'transparent',
                   color: isActive ? '#0284c7' : '#475569',
                   fontWeight: isActive ? 600 : 500,
                   fontSize: '12.5px',
@@ -204,11 +204,26 @@ export const SpatialSidebar: React.FC<SpatialSidebarProps> = ({
                   cursor: 'pointer',
                   width: '100%',
                   textAlign: 'left',
-                  borderLeft: isActive ? '3px solid #0284c7' : '3px solid transparent',
-                  transition: 'background-color 0.15s ease',
+                  zIndex: 1,
+                  outline: 'none',
+                  transition: 'color 0.18s ease',
                 }}
                 title={isCollapsed ? item.label : undefined}
               >
+                {isActive && (
+                  <motion.div
+                    layoutId="activeSidebarNavPill"
+                    transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: '#f0f9ff',
+                      borderRadius: '8px',
+                      borderLeft: '3px solid #0284c7',
+                      zIndex: -1,
+                    }}
+                  />
+                )}
                 <span style={{ display: 'flex', flexShrink: 0 }}>{item.icon}</span>
 
                 {!isCollapsed && (
