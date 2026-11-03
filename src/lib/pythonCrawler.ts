@@ -160,6 +160,13 @@ export async function executeCrawlerOnDomain(
                 countryCode: d.countryCode || 'INT',
                 countryFlag: d.countryFlag || '🌐',
                 status: d.status || 'RESOLVED',
+                category: d.category || 'Corporate & Business Services',
+                categoryIcon: d.categoryIcon || '🌐',
+                isEcommerce: Boolean(d.isEcommerce),
+                ecommerceSignals: Array.isArray(d.ecommerceSignals) ? d.ecommerceSignals : [],
+                technologies: Array.isArray(d.technologies) ? d.technologies : [],
+                phones: Array.isArray(d.phones) ? d.phones : [],
+                summary: d.summary || '',
                 pagesCrawled: d.pagesCrawled || 0,
                 discoveredAt: d.discoveredAt || new Date().toISOString(),
               };
