@@ -177,9 +177,15 @@ class WebCrawler:
                     url,
                     timeout=timeout,
                     allow_redirects=True,
-                    verify=True,
+                    verify=self.session.verify,
                 )
                 
+                # If landing page was redirected, sync starting host
+                if url == self.start_url and response.url:
+                    resp_netloc = urlparse(response.url).netloc.lower()
+                    if resp_netloc and self.root_domain in resp_netloc:
+                        self.starting_netloc = resp_netloc
+
                 content_type = response.headers.get("Content-Type", "").lower()
                 
                 # Only process HTML pages
@@ -189,7 +195,7 @@ class WebCrawler:
 
                 html = response.text
 
-                # Check if JavaScript fallback is needed (Next.js, React SPA, or minimal initial HTML)
+                # Check if JavaScript fallback is needed (Next.js, React SPA, or anti-bot 403)
                 is_spa_page = (
                     "__NEXT_DATA__" in html
                     or 'id="__next"' in html
@@ -197,31 +203,36 @@ class WebCrawler:
                     or 'id="root"' in html
                     or len(html) < 600
                 )
-                if is_spa_page and self.playwright_engine:
-                    logger.info(f"[Playwright Fallback] Dynamic SPA / Next.js detected ({url}). Rendering with headless browser...")
+                if (is_spa_page or response.status_code in (401, 403, 429)) and self.playwright_engine:
+                    logger.info(f"[Playwright Fallback] Rendering dynamic / protected page ({url}, status {response.status_code})...")
                     rendered = self.playwright_engine.render_page(url)
                     if rendered and len(rendered) > 100:
-                        html = rendered
+                        return rendered, 200, "text/html"
+
+                if response.status_code >= 400 and url != self.start_url:
+                    logger.debug(f"HTTP {response.status_code} received on {url}")
+                    return None
 
                 return html, response.status_code, content_type
 
             except requests.exceptions.Timeout:
                 logger.warning(f"Timeout on {url} (Attempt {attempt}/{retries + 1})")
             except requests.exceptions.SSLError as ssl_err:
-                logger.warning(f"SSL Error on {url}: {ssl_err}. Retrying with SSL verification bypassed...")
+                logger.warning(f"SSL Error on {url}: {ssl_err}. Setting session SSL verification to False...")
+                self.session.verify = False
                 try:
                     import urllib3
                     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-                    insecure_resp = requests.get(
+                    insecure_resp = self.session.get(
                         url,
                         timeout=timeout,
                         allow_redirects=True,
                         verify=False,
-                        headers=self.session.headers,
                     )
                     ct = insecure_resp.headers.get("Content-Type", "").lower()
-                    if "text/html" in ct or "application/xhtml" in ct:
-                        return insecure_resp.text, insecure_resp.status_code, ct
+                    if ("text/html" in ct or "application/xhtml" in ct):
+                        if insecure_resp.status_code < 400 or url == self.start_url:
+                            return insecure_resp.text, insecure_resp.status_code, ct
                 except Exception as inner_e:
                     logger.warning(f"Insecure SSL bypass failed on {url}: {inner_e}")
                 break
@@ -367,10 +378,8 @@ class WebCrawler:
 
                 # Mark as visited
                 self.visited_urls.add(current_url)
-                pages_crawled += 1
 
                 is_contact_target = any(k in current_url.lower() for k in ["contact", "reach-us", "get-in-touch", "support", "about", "branch"])
-                logger.info(f"[{pages_crawled}/{self.config['max_pages']}] Crawling (depth {depth}, prio {prio}): {current_url}")
 
                 # Hybrid Fetching Strategy:
                 # If contact target and Playwright engine available, use dynamic DOM extraction
@@ -381,7 +390,7 @@ class WebCrawler:
                 if is_contact_target and self.playwright_engine and current_url != self.start_url:
                     logger.info(f"[PlaywrightCrawler] Dynamically rendering internal contact page: {current_url}")
                     dynamic_pw_data = self.playwright_engine.extract_dynamic_page(current_url)
-                    if dynamic_pw_data and dynamic_pw_data.get("html"):
+                    if dynamic_pw_data and dynamic_pw_data.get("html") and dynamic_pw_data.get("status_code", 200) < 400:
                         html = dynamic_pw_data["html"]
                         status_code = dynamic_pw_data.get("status_code", 200)
 
@@ -390,6 +399,14 @@ class WebCrawler:
                     if not fetch_result:
                         continue
                     html, status_code, _ = fetch_result
+
+                # Discard non-content, empty, or HTTP error responses (allow start_url to discover links)
+                if not html or (status_code >= 400 and current_url != self.start_url) or len(html.strip()) < 50:
+                    continue
+
+                # Successfully fetched real content! Increment crawled pages counter
+                pages_crawled += 1
+                logger.info(f"[{pages_crawled}/{self.config['max_pages']}] Successfully Crawled (depth {depth}, prio {prio}): {current_url}")
 
                 # Parse HTML with BeautifulSoup
                 soup = BeautifulSoup(html, "lxml" if "lxml" in BeautifulSoup.__module__ else "html.parser")
@@ -547,16 +564,21 @@ class WebCrawler:
                             prio_score = get_url_priority(link)
                             queue.append((prio_score, depth + 1, link))
 
-                # Proactive Candidate Contact URL Injection after visiting the root page
-                if pages_crawled == 1:
+                # Proactive Candidate Contact URL Injection after visiting the root page:
+                # Only inject fallback paths if no contact link was discovered from internal_links
+                has_contact_in_internal = any(
+                    any(k in l.lower() for k in ["contact", "reach-us", "support", "about"])
+                    for l in internal_links
+                )
+                if pages_crawled == 1 and not has_contact_in_internal:
                     contact_candidates = [
-                        "/contact", "/contact-us", "/contactus", "/about-us", "/support", "/reach-us", "/branches"
+                        "/contact", "/contact-us", "/about-us", "/support"
                     ]
                     for path in contact_candidates:
                         probe_candidate = f"{self.scheme}://{self.starting_netloc}{path}"
                         if probe_candidate not in self.visited_urls and probe_candidate not in self.queued_urls:
                             self.queued_urls.add(probe_candidate)
-                            queue.append((90, 1, probe_candidate))
+                            queue.append((40, 1, probe_candidate))
 
                 # Incremental Checkpoint: Sync to MongoDB so UI updates live
                 if pages_crawled == 1 or new_subdomains or self.verified_emails_map or (pages_crawled % 3 == 0):

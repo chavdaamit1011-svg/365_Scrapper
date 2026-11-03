@@ -16,8 +16,8 @@ DEFAULT_CRAWLER_CONFIG = {
     "timeout": 10,          # HTTP request timeout in seconds
     "retries": 2,           # Retry count on network error
     
-    # User Agent
-    "user_agent": "TheScrapper-Engine/1.0 (+https://localhost:3131; bot@thescrapper.local)",
+    # User Agent (Industry-standard Chrome User Agent to avoid false 403 blocks)
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
     
     # Compliance
     "respect_robots_txt": True,

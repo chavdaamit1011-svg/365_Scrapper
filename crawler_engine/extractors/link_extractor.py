@@ -146,14 +146,19 @@ def extract_links_and_subdomains(
         parsed = urlparse(normalized)
         link_host = parsed.netloc.lower().split(":")[0]
 
-        # Check if internal (exact host match)
-        if link_host == starting_host:
+        # Check if internal (exact host match OR www/non-www variant of target host)
+        is_same_host = (
+            link_host == starting_host
+            or link_host.replace("www.", "") == starting_host.replace("www.", "")
+        )
+
+        if is_same_host:
             internal_links.add(normalized)
         else:
             external_links.add(normalized)
             
             # Check if this link is a subdomain of the target root domain
-            if link_host.endswith(f".{root_domain}") and link_host != starting_host:
+            if link_host.endswith(f".{root_domain}") and not is_same_host:
                 subdomains.add(link_host)
 
     # 2. Examine script sources, iframes, links
@@ -177,7 +182,14 @@ def extract_links_and_subdomains(
     )
     for match in subdomain_pattern.finditer(raw_html or soup.get_text()):
         found_host = match.group(0).lower().strip().rstrip(".")
-        if found_host != starting_host and found_host.endswith(f".{root_domain}"):
+        # Clean hex prefixes from url encoding like 2fwww or 2f2f
+        found_host = re.sub(r'^(?:2f)+', '', found_host)
+        if (
+            found_host != starting_host
+            and found_host.endswith(f".{root_domain}")
+            and not found_host.startswith(".")
+            and all(c.isalnum() or c in "-." for c in found_host)
+        ):
             subdomains.add(found_host)
 
     # 4. Extract Next.js / SPA internal routes from JSON state (__NEXT_DATA__)
@@ -189,8 +201,10 @@ def extract_links_and_subdomains(
                 if not any(p.endswith(ext) for ext in (".js", ".css", ".png", ".jpg", ".svg", ".json", ".ico")):
                     cand_url = urljoin(base_url, p)
                     norm = normalize_url(cand_url)
-                    if norm and urlparse(norm).netloc.lower().split(":")[0] == starting_host:
-                        internal_links.add(norm)
+                    if norm:
+                        h = urlparse(norm).netloc.lower().split(":")[0]
+                        if h == starting_host or h.replace("www.", "") == starting_host.replace("www.", ""):
+                            internal_links.add(norm)
         except Exception:
             pass
 

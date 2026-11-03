@@ -152,8 +152,8 @@ export function useCrawlerController(
         }
       }, 7000);
 
-      const interactiveMaxPages = 10;
-      const interactiveMaxDepth = 2;
+      const interactiveMaxPages = 25;
+      const interactiveMaxDepth = 3;
 
       try {
         // Enqueue job via Redis API route /api/crawl-jobs (Component 1 of PDF)
