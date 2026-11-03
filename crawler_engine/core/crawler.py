@@ -16,7 +16,15 @@ from crawler_engine.extractors.link_extractor import (
     discover_subdomains_via_osint,
     detect_country_from_domain,
 )
-from crawler_engine.extractors.email_extractor import extract_emails_from_html, rank_emails_by_relevance
+from crawler_engine.extractors.email_extractor import (
+    extract_emails_from_html,
+    rank_emails_by_relevance,
+    extract_detailed_emails,
+    normalize_email,
+    decode_cloudflare_email,
+    lookup_mx_records,
+    get_email_priority_score,
+)
 from crawler_engine.extractors.metadata_extractor import extract_page_metadata
 from crawler_engine.extractors.site_classifier import classify_website_content
 from crawler_engine.storage.file_storage import LocalFileStorage
@@ -69,6 +77,7 @@ class WebCrawler:
         self.all_subdomains: Set[str] = set()
         self.all_emails: Set[str] = set()
         self.all_external_links: Set[str] = set()
+        self.verified_emails_map: Dict[str, Dict[str, Any]] = {}
 
         # Structured record lists for export and MongoDB
         self.visited_records: List[Dict[str, Any]] = []
@@ -237,7 +246,17 @@ class WebCrawler:
         """
         try:
             country_name, country_code, country_flag = detect_country_from_domain(self.root_domain)
-            ranked_emails = rank_emails_by_relevance(list(self.all_emails), root_domain=self.root_domain)
+            
+            # Sort verified emails with priority scores and mark primary
+            sorted_verified = sorted(
+                list(self.verified_emails_map.values()),
+                key=lambda x: (x.get("priorityScore", 0), x.get("email", "")),
+                reverse=True
+            )
+            for idx, item in enumerate(sorted_verified):
+                item["isPrimary"] = (idx == 0)
+
+            ranked_emails = [item["email"] for item in sorted_verified]
             sorted_subdomains = sorted(list(self.all_subdomains))
 
             domain_record = {
@@ -249,6 +268,7 @@ class WebCrawler:
                 "subdomainCount": len(sorted_subdomains),
                 "email": ranked_emails[0] if ranked_emails else "",
                 "emails": ranked_emails,
+                "verifiedEmails": sorted_verified,
                 "emailCount": len(ranked_emails),
                 "category": self.site_intelligence.get("category", "Corporate & Business Services"),
                 "categoryIcon": self.site_intelligence.get("category_icon", "🌐"),
@@ -305,15 +325,32 @@ class WebCrawler:
             except Exception:
                 pass
 
-        # Queue items format: (url, current_depth)
-        queue: List[Tuple[str, int]] = [(self.start_url, 0)]
+        # Queue items format: (priority, depth, url)
+        # Priority: Contact/About (100) > Candidate Probes (90) > Services (30) > Standard (10) > Noise (-50)
+        def get_url_priority(target_url: str) -> int:
+            path_low = urlparse(target_url).path.lower()
+            if any(k in path_low for k in ["contact", "contact-us", "contactus", "reach-us", "get-in-touch"]):
+                return 100
+            if any(k in path_low for k in ["support", "help", "branch", "branches", "locations", "office", "enquiry", "enquiries"]):
+                return 80
+            if any(k in path_low for k in ["about", "about-us", "aboutus", "team", "leadership"]):
+                return 60
+            if any(k in path_low for k in ["service", "services", "solution", "solutions", "product", "products", "company"]):
+                return 30
+            if any(k in path_low for k in ["privacy", "terms", "cookie", "disclaimer", "faq", "cart", "checkout", "login", "register", "blog", "tag", "category"]):
+                return -50
+            return 10
+
+        queue: List[Tuple[int, int, str]] = [(1000, 0, self.start_url)]
         self.queued_urls.add(self.start_url)
 
         pages_crawled = 0
 
         try:
             while queue and pages_crawled < self.config["max_pages"]:
-                current_url, depth = queue.pop(0)
+                # Always pop the highest priority URL from the queue
+                queue.sort(key=lambda item: item[0], reverse=True)
+                prio, depth, current_url = queue.pop(0)
 
                 # Skip if already visited
                 if current_url in self.visited_urls:
@@ -332,18 +369,30 @@ class WebCrawler:
                 self.visited_urls.add(current_url)
                 pages_crawled += 1
 
-                logger.info(f"[{pages_crawled}/{self.config['max_pages']}] Crawling (depth {depth}): {current_url}")
+                is_contact_target = any(k in current_url.lower() for k in ["contact", "reach-us", "get-in-touch", "support", "about", "branch"])
+                logger.info(f"[{pages_crawled}/{self.config['max_pages']}] Crawling (depth {depth}, prio {prio}): {current_url}")
 
-                # Fetch page
-                fetch_result = self.fetch_page_content(current_url)
-                if not fetch_result:
-                    continue
+                # Hybrid Fetching Strategy:
+                # If contact target and Playwright engine available, use dynamic DOM extraction
+                html = None
+                status_code = 200
+                dynamic_pw_data = None
 
-                html, status_code, _ = fetch_result
+                if is_contact_target and self.playwright_engine and current_url != self.start_url:
+                    logger.info(f"[PlaywrightCrawler] Dynamically rendering internal contact page: {current_url}")
+                    dynamic_pw_data = self.playwright_engine.extract_dynamic_page(current_url)
+                    if dynamic_pw_data and dynamic_pw_data.get("html"):
+                        html = dynamic_pw_data["html"]
+                        status_code = dynamic_pw_data.get("status_code", 200)
+
+                if not html:
+                    fetch_result = self.fetch_page_content(current_url)
+                    if not fetch_result:
+                        continue
+                    html, status_code, _ = fetch_result
 
                 # Parse HTML with BeautifulSoup
                 soup = BeautifulSoup(html, "lxml" if "lxml" in BeautifulSoup.__module__ else "html.parser")
-
                 timestamp_now = datetime.datetime.now().isoformat()
 
                 # 1. Extract Links & Subdomains (from DOM, tags, and raw HTML)
@@ -351,8 +400,99 @@ class WebCrawler:
                     soup, html, current_url, self.starting_netloc
                 )
 
-                # 2. Extract Visible Emails (strictly filtered against dummy templates and aligned to target)
-                emails = extract_emails_from_html(soup, html, target_root_domain=self.root_domain)
+                # If Playwright had extra dynamic links, merge them
+                if dynamic_pw_data and dynamic_pw_data.get("links"):
+                    for plink in dynamic_pw_data["links"]:
+                        if plink and plink.startswith("http") and self.starting_netloc in plink:
+                            internal_links.add(plink)
+
+                # 2. Extract Detailed Emails (Normalization, Deduplication, MX Verification, Source URL)
+                page_detailed_emails = extract_detailed_emails(
+                    soup=soup,
+                    raw_html=html,
+                    source_url=current_url,
+                    target_root_domain=self.root_domain
+                )
+
+                for detail in page_detailed_emails:
+                    norm_e = detail["email"]
+                    if norm_e not in self.verified_emails_map:
+                        self.verified_emails_map[norm_e] = detail
+                        self.all_emails.add(norm_e)
+                        self.email_records.append({
+                            "email": norm_e,
+                            "source_url": detail["sourceUrl"],
+                            "discovery_method": detail["discoveryMethod"],
+                            "mx_verified": detail["mxVerified"],
+                            "mx_records": detail["mxRecords"],
+                            "domain": self.starting_netloc,
+                            "timestamp": timestamp_now,
+                        })
+                        logger.info(f"  [+] Discovered Verified Email: {norm_e} ({detail['discoveryMethod']}, MX: {detail['mxVerified']}) via {current_url}")
+                    else:
+                        existing = self.verified_emails_map[norm_e]
+                        if is_contact_target and not any(k in existing.get("sourceUrl", "").lower() for k in ["contact", "about", "support"]):
+                            existing["sourceUrl"] = current_url
+                        if detail["discoveryMethod"] in ("mailto_link", "cloudflare_decode"):
+                            existing["discoveryMethod"] = detail["discoveryMethod"]
+
+                # If Playwright found dynamic mailto or cf-protected emails, merge them
+                if dynamic_pw_data:
+                    for m_href in dynamic_pw_data.get("mailtos", []):
+                        norm = normalize_email(m_href)
+                        if norm and is_valid_email(norm, self.root_domain):
+                            if norm not in self.verified_emails_map:
+                                has_mx, mx_hosts = lookup_mx_records(norm.split("@")[1])
+                                score = get_email_priority_score(norm, self.root_domain)
+                                rec = {
+                                    "email": norm,
+                                    "sourceUrl": current_url,
+                                    "discoveryMethod": "playwright_dom",
+                                    "mxVerified": has_mx,
+                                    "mxRecords": mx_hosts[:3] if mx_hosts else [],
+                                    "priorityScore": score,
+                                    "isPrimary": False,
+                                }
+                                self.verified_emails_map[norm] = rec
+                                self.all_emails.add(norm)
+                                self.email_records.append({
+                                    "email": norm,
+                                    "source_url": current_url,
+                                    "discovery_method": "playwright_dom",
+                                    "mx_verified": has_mx,
+                                    "mx_records": mx_hosts[:3] if mx_hosts else [],
+                                    "domain": self.starting_netloc,
+                                    "timestamp": timestamp_now,
+                                })
+                                logger.info(f"  [+] Discovered Playwright DOM Email: {norm} (MX: {has_mx}) via {current_url}")
+
+                    for cf_hex in dynamic_pw_data.get("cfProtected", []):
+                        decoded = decode_cloudflare_email(cf_hex)
+                        if decoded and is_valid_email(decoded, self.root_domain):
+                            if decoded not in self.verified_emails_map:
+                                has_mx, mx_hosts = lookup_mx_records(decoded.split("@")[1])
+                                score = get_email_priority_score(decoded, self.root_domain)
+                                rec = {
+                                    "email": decoded,
+                                    "sourceUrl": current_url,
+                                    "discoveryMethod": "cloudflare_decode",
+                                    "mxVerified": has_mx,
+                                    "mxRecords": mx_hosts[:3] if mx_hosts else [],
+                                    "priorityScore": score,
+                                    "isPrimary": False,
+                                }
+                                self.verified_emails_map[decoded] = rec
+                                self.all_emails.add(decoded)
+                                self.email_records.append({
+                                    "email": decoded,
+                                    "source_url": current_url,
+                                    "discovery_method": "cloudflare_decode",
+                                    "mx_verified": has_mx,
+                                    "mx_records": mx_hosts[:3] if mx_hosts else [],
+                                    "domain": self.starting_netloc,
+                                    "timestamp": timestamp_now,
+                                })
+                                logger.info(f"  [+] Discovered Cloudflare Decoded Email: {decoded} via {current_url}")
 
                 # 3. Extract Metadata
                 meta = extract_page_metadata(soup, current_url)
@@ -389,18 +529,6 @@ class WebCrawler:
                         })
                         logger.info(f"  [+] Discovered Subdomain: {sub}")
 
-                # Record discovered emails
-                for email in emails:
-                    if email not in self.all_emails:
-                        self.all_emails.add(email)
-                        self.email_records.append({
-                            "email": email,
-                            "source_url": current_url,
-                            "domain": self.starting_netloc,
-                            "timestamp": timestamp_now,
-                        })
-                        logger.info(f"  [+] Discovered Email: {email}")
-
                 # Record external links
                 for ext in external_links:
                     if ext not in self.all_external_links:
@@ -411,15 +539,27 @@ class WebCrawler:
                             "timestamp": timestamp_now,
                         })
 
-                # Enqueue internal links for BFS crawling
+                # Enqueue internal links for prioritized crawling
                 if depth < self.config["max_depth"]:
                     for link in internal_links:
                         if link not in self.visited_urls and link not in self.queued_urls:
                             self.queued_urls.add(link)
-                            queue.append((link, depth + 1))
+                            prio_score = get_url_priority(link)
+                            queue.append((prio_score, depth + 1, link))
+
+                # Proactive Candidate Contact URL Injection after visiting the root page
+                if pages_crawled == 1:
+                    contact_candidates = [
+                        "/contact", "/contact-us", "/contactus", "/about-us", "/support", "/reach-us", "/branches"
+                    ]
+                    for path in contact_candidates:
+                        probe_candidate = f"{self.scheme}://{self.starting_netloc}{path}"
+                        if probe_candidate not in self.visited_urls and probe_candidate not in self.queued_urls:
+                            self.queued_urls.add(probe_candidate)
+                            queue.append((90, 1, probe_candidate))
 
                 # Incremental Checkpoint: Sync to MongoDB so UI updates live
-                if pages_crawled == 1 or new_subdomains or emails or (pages_crawled % 3 == 0):
+                if pages_crawled == 1 or new_subdomains or self.verified_emails_map or (pages_crawled % 3 == 0):
                     self._sync_checkpoint_to_mongo(status="CRAWLING")
 
                 # Stream live progress updates to Redis/Worker if callback provided
@@ -451,7 +591,17 @@ class WebCrawler:
         # Component 5 of PDF Architecture: Save raw crawl observations to MongoDB
         logger.info("Saving raw crawl observations to MongoDB collection 'raw_crawl_data'...")
         country_name, country_code, country_flag = detect_country_from_domain(self.root_domain)
-        ranked_emails = rank_emails_by_relevance(list(self.all_emails), root_domain=self.root_domain)
+        
+        # Sort verified emails with priority scores and mark primary
+        sorted_verified = sorted(
+            list(self.verified_emails_map.values()),
+            key=lambda x: (x.get("priorityScore", 0), x.get("email", "")),
+            reverse=True
+        )
+        for idx, item in enumerate(sorted_verified):
+            item["isPrimary"] = (idx == 0)
+
+        ranked_emails = [item["email"] for item in sorted_verified]
         sorted_subdomains = sorted(list(self.all_subdomains))
 
         raw_crawl_doc = {
@@ -470,6 +620,7 @@ class WebCrawler:
             "subdomains": sorted_subdomains,
             "subdomain_count": len(sorted_subdomains),
             "emails": ranked_emails,
+            "verified_emails": sorted_verified,
             "email_count": len(ranked_emails),
             "country_signals": [country_name] if country_name != "Global" else [],
             "crawled_at": datetime.datetime.now().isoformat(),
@@ -488,6 +639,7 @@ class WebCrawler:
             "subdomainCount": len(sorted_subdomains),
             "email": ranked_emails[0] if ranked_emails else "",
             "emails": ranked_emails,
+            "verifiedEmails": sorted_verified,
             "emailCount": len(ranked_emails),
             "category": self.site_intelligence.get("category", "Corporate & Business Services"),
             "categoryIcon": self.site_intelligence.get("category_icon", "🌐"),

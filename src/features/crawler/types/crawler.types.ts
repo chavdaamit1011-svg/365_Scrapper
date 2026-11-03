@@ -2,6 +2,16 @@ export type CrawlerExecutionState = 'IDLE' | 'RUNNING' | 'PAUSED' | 'CANCELLED' 
 
 export type CrawlRecordStatus = 'RESOLVED' | 'ACTIVE' | 'PENDING' | 'ERROR';
 
+export interface VerifiedEmailDetail {
+  email: string;
+  sourceUrl?: string;
+  discoveryMethod?: string;
+  mxVerified?: boolean;
+  mxRecords?: string[];
+  priorityScore?: number;
+  isPrimary?: boolean;
+}
+
 export interface ScrapedDataRecord {
   id: string;
   targetId?: string;
@@ -12,6 +22,7 @@ export interface ScrapedDataRecord {
   subdomainCount?: number;
   email: string;
   emails?: string[];
+  verifiedEmails?: VerifiedEmailDetail[];
   emailCount?: number;
   category?: string;
   categoryIcon?: string;

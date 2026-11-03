@@ -28,6 +28,7 @@ export async function GET() {
       subdomainCount: typeof d.subdomainCount === 'number' ? d.subdomainCount : (Array.isArray(d.subdomains) ? d.subdomains.length : 0),
       email: d.email || (Array.isArray(d.emails) && d.emails[0]) || '',
       emails: Array.isArray(d.emails) ? d.emails : (d.email ? [d.email] : []),
+      verifiedEmails: Array.isArray(d.verifiedEmails) ? d.verifiedEmails : [],
       emailCount: typeof d.emailCount === 'number' ? d.emailCount : (Array.isArray(d.emails) ? d.emails.length : 0),
       category: d.category || 'Corporate & Business Services',
       categoryIcon: d.categoryIcon || '🌐',

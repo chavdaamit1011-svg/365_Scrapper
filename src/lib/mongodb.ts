@@ -92,6 +92,20 @@ const ScrapedResultSchema = new mongoose.Schema(
     email: { type: String, default: '' },
     emails: { type: [String], default: [] },
     emailCount: { type: Number, default: 0 },
+    verifiedEmails: {
+      type: [
+        {
+          email: { type: String, required: true },
+          sourceUrl: { type: String, default: '' },
+          discoveryMethod: { type: String, default: 'regex_body' },
+          mxVerified: { type: Boolean, default: false },
+          mxRecords: { type: [String], default: [] },
+          priorityScore: { type: Number, default: 0 },
+          isPrimary: { type: Boolean, default: false },
+        },
+      ],
+      default: [],
+    },
     category: { type: String, default: 'Corporate & Business Services' },
     categoryIcon: { type: String, default: '🌐' },
     isEcommerce: { type: Boolean, default: false },

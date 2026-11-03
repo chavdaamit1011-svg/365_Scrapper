@@ -141,6 +141,72 @@ class PlaywrightCrawlerEngine:
                 except Exception:
                     pass
 
+    def extract_dynamic_page(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Renders the page in Chromium, waits for DOM hydration,
+        and directly queries DOM for dynamic mailto links, Cloudflare protected emails,
+        contact blocks, links, and HTML.
+        """
+        if not self.is_active or not self._context:
+            started = self.start()
+            if not started:
+                return None
+
+        page: Optional[Page] = None
+        try:
+            page = self._context.new_page()
+            page.set_default_timeout(self.timeout_ms)
+
+            response = page.goto(url, wait_until="domcontentloaded")
+            # Wait for client-side JavaScript / Next.js hydration
+            page.wait_for_timeout(1000)
+
+            title = page.title()
+            html = page.content()
+            status_code = response.status if response else 200
+
+            # Direct DOM extraction of mailto, cf-emails, contact blocks, and links
+            dom_data = page.evaluate("""() => {
+                const mailtos = Array.from(document.querySelectorAll('a[href^="mailto:" i]'))
+                    .map(a => a.getAttribute('href') || '');
+
+                const cfProtected = Array.from(document.querySelectorAll('[data-cfemail]'))
+                    .map(el => el.getAttribute('data-cfemail') || '');
+
+                const contactElements = Array.from(
+                    document.querySelectorAll('address, footer, header, [id*="contact" i], [class*="contact" i]')
+                ).map(el => el.innerText || '');
+
+                const allHrefs = Array.from(document.querySelectorAll('a[href]'))
+                    .map(a => a.getAttribute('href') || '');
+
+                return {
+                    mailtos: mailtos,
+                    cfProtected: cfProtected,
+                    contactText: contactElements.join('\\n'),
+                    hrefs: allHrefs
+                };
+            }""")
+
+            return {
+                "html": html,
+                "title": title,
+                "status_code": status_code,
+                "mailtos": dom_data.get("mailtos", []),
+                "cfProtected": dom_data.get("cfProtected", []),
+                "contactText": dom_data.get("contactText", ""),
+                "links": dom_data.get("hrefs", []),
+            }
+        except Exception as err:
+            logger.warning(f"[Playwright] Error extracting dynamic page {url}: {err}")
+            return None
+        finally:
+            if page:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+
     def stop(self) -> None:
         """Closes browser and stops Playwright runtime."""
         try:

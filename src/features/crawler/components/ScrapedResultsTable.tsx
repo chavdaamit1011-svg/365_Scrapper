@@ -935,53 +935,159 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   No public emails found on crawled pages.
                                 </p>
                               ) : (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
                                   {emails.map((email, idx) => {
                                     const isPrimary = idx === 0;
+                                    const detail = Array.isArray(r.verifiedEmails)
+                                      ? r.verifiedEmails.find((v) => v.email?.toLowerCase() === email.toLowerCase())
+                                      : undefined;
+                                    const sourceUrl = detail?.sourceUrl;
+                                    const discoveryMethod = detail?.discoveryMethod;
+                                    const mxVerified = detail?.mxVerified;
+                                    const mxRecords = detail?.mxRecords;
+
                                     return (
                                       <div
                                         key={email}
                                         style={{
-                                          display: 'inline-flex',
+                                          display: 'flex',
                                           alignItems: 'center',
-                                          gap: '6px',
-                                          padding: '4px 10px',
-                                          borderRadius: '6px',
-                                          background: isPrimary ? '#ecfdf5' : '#fef3c7',
-                                          border: `1px solid ${isPrimary ? '#a7f3d0' : '#fde68a'}`,
-                                          fontSize: '12px',
-                                          color: isPrimary ? '#065f46' : '#92400e',
-                                          fontWeight: 600,
+                                          justifyContent: 'space-between',
+                                          flexWrap: 'wrap',
+                                          gap: '8px',
+                                          padding: '8px 12px',
+                                          borderRadius: '8px',
+                                          background: isPrimary ? '#f0fdf4' : '#f8fafc',
+                                          border: `1px solid ${isPrimary ? '#bbf7d0' : '#e2e8f0'}`,
                                         }}
                                       >
-                                        <span>{email}</span>
-                                        {isPrimary && (
-                                          <span
-                                            style={{
-                                              fontSize: '9.5px',
-                                              background: '#059669',
-                                              color: '#fff',
-                                              padding: '1px 5px',
-                                              borderRadius: '3px',
-                                              fontWeight: 700,
-                                            }}
-                                          >
-                                            Primary
+                                        {/* Left: Email + Badges */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                          <Mail size={14} color={isPrimary ? '#16a34a' : '#0284c7'} />
+                                          <span style={{ fontSize: '12.5px', fontWeight: 600, color: 'var(--text-main)' }}>
+                                            {email}
                                           </span>
-                                        )}
+
+                                          {isPrimary && (
+                                            <span
+                                              style={{
+                                                fontSize: '10px',
+                                                background: '#059669',
+                                                color: '#fff',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                fontWeight: 700,
+                                              }}
+                                            >
+                                              Primary
+                                            </span>
+                                          )}
+
+                                          {/* MX Record Verification Badge */}
+                                          {mxVerified !== undefined && (
+                                            <span
+                                              style={{
+                                                fontSize: '10px',
+                                                fontWeight: 600,
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                background: mxVerified ? '#ecfdf5' : '#fef2f2',
+                                                color: mxVerified ? '#065f46' : '#991b1b',
+                                                border: `1px solid ${mxVerified ? '#a7f3d0' : '#fecaca'}`,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '3px',
+                                              }}
+                                              title={mxRecords && mxRecords.length > 0 ? `Mail Exchange Server: ${mxRecords.join(', ')}` : (mxVerified ? 'MX Records Verified' : 'No MX Records Found')}
+                                            >
+                                              <ShieldCheck size={11} color={mxVerified ? '#059669' : '#dc2626'} />
+                                              {mxVerified ? 'MX Verified' : 'No MX'}
+                                            </span>
+                                          )}
+
+                                          {/* Discovery Method Badge */}
+                                          {discoveryMethod && (
+                                            <span
+                                              style={{
+                                                fontSize: '10px',
+                                                fontWeight: 600,
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                background: discoveryMethod === 'playwright_dom' ? '#f5f3ff' : discoveryMethod === 'cloudflare_decode' ? '#ecfeff' : discoveryMethod === 'mailto_link' ? '#eff6ff' : '#f1f5f9',
+                                                color: discoveryMethod === 'playwright_dom' ? '#6d28d9' : discoveryMethod === 'cloudflare_decode' ? '#0e7490' : discoveryMethod === 'mailto_link' ? '#1d4ed8' : '#475569',
+                                                border: `1px solid ${discoveryMethod === 'playwright_dom' ? '#ddd6fe' : discoveryMethod === 'cloudflare_decode' ? '#a5f3fc' : discoveryMethod === 'mailto_link' ? '#bfdbfe' : '#e2e8f0'}`,
+                                              }}
+                                              title={`Discovered via: ${discoveryMethod}`}
+                                            >
+                                              {discoveryMethod === 'playwright_dom' && '⚡ Playwright DOM'}
+                                              {discoveryMethod === 'cloudflare_decode' && '🛡️ Cloudflare Decoded'}
+                                              {discoveryMethod === 'mailto_link' && '🔗 mailto:'}
+                                              {discoveryMethod === 'semantic_contact_section' && '📄 Contact Section'}
+                                              {discoveryMethod === 'visible_text' && '🔍 Body Text'}
+                                              {!['playwright_dom', 'cloudflare_decode', 'mailto_link', 'semantic_contact_section', 'visible_text'].includes(discoveryMethod) && discoveryMethod}
+                                            </span>
+                                          )}
+
+                                          {/* Source URL badge */}
+                                          {sourceUrl && (
+                                            <a
+                                              href={sourceUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              title={`Extracted from: ${sourceUrl}`}
+                                              style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                fontSize: '10.5px',
+                                                fontWeight: 500,
+                                                color: '#0284c7',
+                                                textDecoration: 'none',
+                                                background: '#f0f9ff',
+                                                border: '1px solid #bae6fd',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                              }}
+                                              onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                                              onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+                                            >
+                                              <span>📍 {sourceUrl.replace(/^https?:\/\/[^\/]+/, '') || '/'}</span>
+                                              <ExternalLink size={10} />
+                                            </a>
+                                          )}
+                                        </div>
+
+                                        {/* Right: Copy Button */}
                                         <button
                                           type="button"
                                           onClick={() => handleCopy(email, `${r.id}_em_${email}`)}
                                           title="Copy email"
                                           style={{
-                                            background: 'none',
-                                            border: 'none',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                            background: '#ffffff',
+                                            border: '1px solid #cbd5e1',
+                                            borderRadius: '5px',
                                             cursor: 'pointer',
-                                            padding: 0,
-                                            color: copiedId === `${r.id}_em_${email}` ? '#10b981' : (isPrimary ? '#059669' : '#b45309'),
+                                            padding: '3px 8px',
+                                            fontSize: '11px',
+                                            fontWeight: 500,
+                                            color: copiedId === `${r.id}_em_${email}` ? '#10b981' : '#475569',
+                                            transition: 'all 0.15s ease',
                                           }}
                                         >
-                                          {copiedId === `${r.id}_em_${email}` ? <Check size={12} /> : <Copy size={12} />}
+                                          {copiedId === `${r.id}_em_${email}` ? (
+                                            <>
+                                              <Check size={12} color="#10b981" />
+                                              <span>Copied</span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <Copy size={12} />
+                                              <span>Copy</span>
+                                            </>
+                                          )}
                                         </button>
                                       </div>
                                     );
