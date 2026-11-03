@@ -109,7 +109,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [countryFilter, setCountryFilter] = useState<string>('ALL');
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [expandedDomainIds, setExpandedDomainIds] = useState<Set<string>>(new Set());
+  const [expandedDomainId, setExpandedDomainId] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
 
   // Group and normalize records by root domain so every domain is an organized master entity
@@ -218,15 +218,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   }, [domainGroups, searchTerm, countryFilter]);
 
   const toggleExpand = (domainId: string) => {
-    setExpandedDomainIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(domainId)) {
-        next.delete(domainId);
-      } else {
-        next.add(domainId);
-      }
-      return next;
-    });
+    setExpandedDomainId((prev) => (prev === domainId ? null : domainId));
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -247,6 +239,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
     }
     try {
       setIsClearing(true);
+      setExpandedDomainId(null);
       const res = await fetch('/api/crawler/results', { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
@@ -483,7 +476,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             </thead>
             <tbody>
               {filteredGroups.map((r, idx) => {
-                const isExpanded = expandedDomainIds.has(r.id);
+                const isExpanded = expandedDomainId === r.id;
                 const subdomains = r.subdomains || [];
                 const emails = r.emails || [];
 
@@ -727,28 +720,73 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                           variant="ghost"
                           size="sm"
                           onClick={() => toggleExpand(r.id)}
-                          rightIcon={isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                          rightIcon={
+                            <ChevronDown
+                              size={13}
+                              style={{
+                                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)',
+                              }}
+                            />
+                          }
                         >
                           {isExpanded ? 'Hide' : 'Details'}
                         </Button>
                       </td>
                     </tr>
 
-                    {/* Expandable Details Row */}
-                    {isExpanded && (
-                      <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                        <td colSpan={6} style={{ padding: '16px 20px' }}>
+                    {/* Expandable Details Row with Smooth Accordion Animation */}
+                    <tr
+                      style={{
+                        background: isExpanded ? '#f8fafc' : 'transparent',
+                        borderBottom: isExpanded ? '1px solid #e2e8f0' : 'none',
+                        transition: 'background 0.25s ease',
+                      }}
+                    >
+                      <td
+                        colSpan={6}
+                        style={{
+                          padding: 0,
+                          border: 'none',
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: 'grid',
+                            gridTemplateRows: isExpanded ? '1fr' : '0fr',
+                            transition: 'grid-template-rows 0.32s cubic-bezier(0.4, 0, 0.2, 1)',
+                          }}
+                        >
                           <div
                             style={{
-                              background: '#ffffff',
-                              border: '1px solid #e2e8f0',
-                              borderRadius: '8px',
-                              padding: '16px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '14px',
+                              overflow: 'hidden',
+                              minHeight: 0,
+                              visibility: isExpanded ? 'visible' : 'hidden',
+                              transition: isExpanded
+                                ? 'visibility 0s linear 0s'
+                                : 'visibility 0s linear 0.32s',
                             }}
                           >
+                            <div
+                              style={{
+                                padding: '6px 20px 20px 20px',
+                                opacity: isExpanded ? 1 : 0,
+                                transform: isExpanded ? 'translateY(0)' : 'translateY(-6px)',
+                                transition: 'opacity 0.22s ease 0.05s, transform 0.22s ease 0.05s',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  background: '#ffffff',
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: '8px',
+                                  padding: '16px',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '14px',
+                                  boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
+                                }}
+                              >
                             {/* Website Intelligence & Content Classification */}
                             <div
                               style={{
@@ -1118,11 +1156,13 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               )}
                             </div>
                           </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
+                        </div>
+                      </div>
+                    </div>
+                  </td>
+                </tr>
+              </React.Fragment>
+              );
               })}
             </tbody>
           </table>
