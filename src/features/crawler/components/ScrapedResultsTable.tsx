@@ -445,7 +445,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 {subdomains.length} Subdomains
                               </span>
                               {subdomains.slice(0, 2).map((sub) => {
-                                const targetUrl = sub.startsWith('http') ? sub : `https://${sub}`;
+                                const targetUrl = sub.startsWith('http://') || sub.startsWith('https://') ? sub : `https://${sub}`;
                                 return (
                                   <a
                                     key={sub}
@@ -454,6 +454,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     rel="noopener noreferrer"
                                     title={`Open ${targetUrl} in new tab`}
                                     style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
                                       fontSize: '11.5px',
                                       fontWeight: 500,
                                       padding: '2px 7px',
@@ -462,9 +465,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                       color: '#0369a1',
                                       border: '1px solid #e2e8f0',
                                       textDecoration: 'none',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
+                                      cursor: 'pointer',
                                       transition: 'all 0.15s ease',
                                     }}
                                     onMouseEnter={(e) => {
@@ -477,7 +478,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     }}
                                   >
                                     <span>{sub}</span>
-                                    <ExternalLink size={10} color="#0284c7" />
+                                    <ExternalLink size={10} style={{ flexShrink: 0 }} />
                                   </a>
                                 );
                               })}
@@ -627,25 +628,25 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               ) : (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
                                   {subdomains.map((sub) => {
-                                    const targetUrl = sub.startsWith('http') ? sub : `https://${sub}`;
+                                    const targetUrl = sub.startsWith('http://') || sub.startsWith('https://') ? sub : `https://${sub}`;
                                     return (
                                       <a
                                         key={sub}
                                         href={targetUrl}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        title={`Redirect to ${targetUrl}`}
+                                        title={`Open ${targetUrl} in new tab`}
                                         style={{
                                           display: 'inline-flex',
                                           alignItems: 'center',
                                           gap: '6px',
-                                          padding: '5px 10px',
+                                          padding: '5px 12px',
                                           borderRadius: '6px',
                                           background: '#f8fafc',
                                           border: '1px solid #cbd5e1',
                                           fontSize: '12px',
                                           color: '#0369a1',
-                                          fontWeight: 600,
+                                          fontWeight: 500,
                                           textDecoration: 'none',
                                           cursor: 'pointer',
                                           transition: 'all 0.15s ease',
@@ -662,7 +663,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                         }}
                                       >
                                         <span>{sub}</span>
-                                        <ExternalLink size={12} style={{ flexShrink: 0 }} />
+                                        <ExternalLink size={12} color="#0284c7" style={{ flexShrink: 0 }} />
                                       </a>
                                     );
                                   })}
