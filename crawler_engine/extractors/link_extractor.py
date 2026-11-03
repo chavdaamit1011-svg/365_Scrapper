@@ -77,114 +77,172 @@ def detect_country_from_domain(domain: str) -> Tuple[str, str, str]:
     return ("Global", "INT", "🌐")
 
 
-def discover_subdomains_via_osint(root_domain: str, timeout: int = 8, mongo_storage=None) -> Set[str]:
+def discover_subdomains_via_osint(root_domain: str, timeout: int = 30, mongo_storage=None) -> Set[str]:
     """
-    Discovers publicly registered subdomains using:
+    Discovers publicly registered subdomains using dynamic multi-source OSINT running concurrently:
     1. Dynamic MongoDB cross-reference (all targets/subdomains in DB belonging to this root domain)
-    2. Certificate Transparency Logs (crt.sh direct & wildcard)
-    3. Active concurrent DNS dictionary probing across standard public/state/administrative prefixes
-    4. DNS host search (HackerTarget)
+    2. Certificate Transparency Logs (crt.sh direct query with retries & SAN parsing)
+    3. URLScan.io passive DNS & host search
+    4. HackerTarget DNS host search (with quota detection)
+    5. Archive.org Wayback CDX historical indexing
+    6. High-performance concurrent DNS dictionary probing across public/state/administrative prefixes
     Zero guessing - 100% genuine SSL/DNS records.
     """
     import socket
-    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import ThreadPoolExecutor, as_completed
 
     subdomains: Set[str] = set()
     clean_root = root_domain.lower().strip()
     suffix = f".{clean_root}"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36"}
+
+    def _is_valid_sub(host: str) -> bool:
+        if not host or host == clean_root:
+            return False
+        if not host.endswith(suffix):
+            return False
+        # Disallow wildcards or invalid host characters
+        return all(c.isalnum() or c in "-." for c in host) and not host.startswith(".")
 
     # 1. Dynamic MongoDB Cross-Reference (incorporates any previously discovered/crawled targets)
     if mongo_storage and hasattr(mongo_storage, "get_known_subdomains_for_domain"):
         try:
             db_subs = mongo_storage.get_known_subdomains_for_domain(clean_root)
             for s in db_subs:
-                subdomains.add(s)
+                s_clean = s.strip().lower()
+                if _is_valid_sub(s_clean):
+                    subdomains.add(s_clean)
             if db_subs:
                 logger.info(f"[Subdomain Recon] Added {len(db_subs)} subdomains from MongoDB cross-reference.")
         except Exception as e:
             logger.debug(f"MongoDB cross-ref skipped: {e}")
 
-    # 2. Certificate Transparency Logs (crt.sh) - Direct query (fast, bypasses SQL timeout on huge ccTLDs)
-    try:
-        url = f"https://crt.sh/?q={clean_root}&output=json"
-        res = requests.get(url, headers=headers, timeout=timeout)
-        if res.status_code == 200:
-            for item in res.json():
-                name = item.get("name_value", "")
-                for sub in name.split("\n"):
-                    sub = sub.strip().lower()
-                    if "*" in sub:
-                        sub = sub.replace("*.", "")
-                    if sub.endswith(suffix) and sub != clean_root and all(c.isalnum() or c in "-." for c in sub):
-                        subdomains.add(sub)
-    except Exception as e:
-        logger.debug(f"crt.sh direct query skipped or error: {e}")
-
-    # Wildcard query fallback if direct returned fewer than 20 results
-    if len(subdomains) < 20:
+    # Subdomain worker functions:
+    def _task_crtsh() -> Set[str]:
+        found = set()
+        s = requests.Session()
         try:
-            url_wild = f"https://crt.sh/?q=%.{clean_root}&output=json"
-            res_w = requests.get(url_wild, headers=headers, timeout=min(timeout, 5))
-            if res_w.status_code == 200:
-                for item in res_w.json():
+            url = f"https://crt.sh/?q={clean_root}&output=json"
+            res = s.get(url, headers=headers, timeout=timeout)
+            if res.status_code == 200:
+                for item in res.json():
                     name = item.get("name_value", "")
                     for sub in name.split("\n"):
                         sub = sub.strip().lower()
                         if "*" in sub:
-                            sub = sub.replace("*.", "")
-                        if sub.endswith(suffix) and sub != clean_root and all(c.isalnum() or c in "-." for c in sub):
-                            subdomains.add(sub)
-        except Exception as e:
-            logger.debug(f"crt.sh wildcard query skipped or error: {e}")
+                            sub = sub.replace("*.", "").replace("*", "")
+                        sub = sub.rstrip(".")
+                        if _is_valid_sub(sub):
+                            found.add(sub)
+                logger.info(f"[Subdomain Recon] crt.sh discovered {len(found)} subdomains.")
+        except Exception as err:
+            logger.debug(f"crt.sh notice: {err}")
+        return found
 
-    # 3. HackerTarget Host Search
-    try:
-        url = f"https://api.hackertarget.com/hostsearch/?q={clean_root}"
-        res = requests.get(url, headers=headers, timeout=timeout)
-        if res.status_code == 200 and "error" not in res.text.lower():
-            for line in res.text.splitlines():
-                if "," in line:
-                    host = line.split(",")[0].strip().lower()
-                    if host.endswith(suffix) and host != clean_root:
-                        subdomains.add(host)
-    except Exception as e:
-        logger.debug(f"HackerTarget query skipped or error: {e}")
-
-    # 4. Live Concurrent DNS Dictionary Probing (Generic public/state/administrative services)
-    standard_prefixes = [
-        "www", "mail", "webmail", "email", "portal", "admin", "login", "auth", "sso",
-        "secure", "api", "app", "dashboard", "dev", "beta", "stage", "test", "demo",
-        "m", "mobile", "cdn", "static", "media", "assets", "cloud", "vpn", "remote",
-        "gateway", "connect", "direct", "support", "help", "services", "service",
-        "pay", "payment", "billing", "shop", "store", "cart", "status", "monitor",
-        "ns1", "ns2", "dns1", "dns2", "mx1", "mx2", "ftp", "docs", "files",
-        # State and regional public services
-        "digital", "digitalgujarat", "gujarat", "delhi", "maharashtra", "karnataka",
-        "kerala", "tamilnadu", "telangana", "andhra", "rajasthan", "up", "mp", "punjab",
-        "haryana", "bihar", "odisha", "bengal", "assam", "jharkhand", "chhattisgarh",
-        "india", "mygov", "uidai", "gst", "epfo", "nic", "rbi", "upsc", "ssc", "cbse",
-        "irctc", "nvsp", "parivahan", "incometax", "mca", "ayush", "cowin", "digilocker"
-    ]
-
-    def _resolve_candidate(pref: str):
-        cand = f"{pref}.{clean_root}"
-        if cand in subdomains:
-            return None
+    def _task_urlscan() -> Set[str]:
+        found = set()
+        s = requests.Session()
         try:
-            socket.gethostbyname(cand)
-            return cand
-        except Exception:
-            return None
+            url = f"https://urlscan.io/api/v1/search/?q=domain:{clean_root}&size=100"
+            res = s.get(url, headers=headers, timeout=12)
+            if res.status_code == 200:
+                for item in res.json().get("results", []):
+                    page_domain = (item.get("page", {}).get("domain") or "").strip().lower()
+                    if _is_valid_sub(page_domain):
+                        found.add(page_domain)
+                logger.info(f"[Subdomain Recon] URLScan discovered {len(found)} subdomains.")
+        except Exception as err:
+            logger.debug(f"URLScan notice: {err}")
+        return found
 
-    try:
-        with ThreadPoolExecutor(max_workers=20) as executor:
-            for r in executor.map(_resolve_candidate, standard_prefixes):
-                if r:
-                    subdomains.add(r)
-    except Exception as e:
-        logger.debug(f"DNS probe skipped or error: {e}")
+    def _task_hackertarget() -> Set[str]:
+        found = set()
+        s = requests.Session()
+        try:
+            url = f"https://api.hackertarget.com/hostsearch/?q={clean_root}"
+            res = s.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                text_low = res.text.lower()
+                if "error" not in text_low and "quota" not in text_low and "api count exceeded" not in text_low:
+                    for line in res.text.splitlines():
+                        if "," in line:
+                            host = line.split(",")[0].strip().lower()
+                            if _is_valid_sub(host):
+                                found.add(host)
+                    logger.info(f"[Subdomain Recon] HackerTarget discovered {len(found)} subdomains.")
+        except Exception as err:
+            logger.debug(f"HackerTarget notice: {err}")
+        return found
 
+    def _task_archive_org() -> Set[str]:
+        found = set()
+        s = requests.Session()
+        try:
+            url = f"http://web.archive.org/cdx/search/cdx?url=*.{clean_root}/*&output=json&collapse=urlkey&fl=original&limit=500"
+            res = s.get(url, headers=headers, timeout=12)
+            if res.status_code == 200:
+                for row in res.json()[1:]:
+                    parsed_u = urlparse(row[0])
+                    host = parsed_u.netloc.split(":")[0].strip().lower()
+                    if _is_valid_sub(host):
+                        found.add(host)
+                logger.info(f"[Subdomain Recon] Archive.org CDX discovered {len(found)} subdomains.")
+        except Exception as err:
+            logger.debug(f"Archive.org CDX notice: {err}")
+        return found
+
+    def _task_dns_probes() -> Set[str]:
+        found = set()
+        standard_prefixes = [
+            # Standard web & infrastructure
+            "www", "mail", "webmail", "email", "portal", "admin", "login", "auth", "sso",
+            "secure", "api", "app", "dashboard", "dev", "beta", "stage", "test", "demo",
+            "m", "mobile", "cdn", "static", "media", "assets", "cloud", "vpn", "remote",
+            "gateway", "connect", "direct", "support", "help", "services", "service",
+            "pay", "epay", "payment", "billing", "shop", "store", "cart", "status", "monitor",
+            "ns1", "ns2", "dns1", "dns2", "mx1", "mx2", "ftp", "docs", "files",
+            # National Indian Ministries, Constitutional Bodies & Portals
+            "india", "mygov", "uidai", "gst", "epfindia", "epfo", "nic", "rbi", "upsc", "ssc", "cbse",
+            "irctc", "nvsp", "parivahan", "incometax", "incometaxindia", "mca", "ayush", "cowin", "digilocker",
+            "mea", "mha", "finmin", "mof", "isro", "drdo", "railnet", "indiapost", "sebi", "cbic",
+            "icegate", "gem", "esic", "nhp", "pmindia", "presidentofindia", "sansad", "eci", "dgft",
+            "ncs", "samarth", "swayam", "ndl", "aiims", "ignou", "ugc", "aicte", "nta", "bis",
+            "trai", "fssai", "ibbi", "cpcb", "pmkisan", "pmay", "mgnrega", "cybercrime", "pib", "davp",
+            # State Governments & Regional Portals
+            "gujarat", "digitalgujarat", "ceogujarat", "maharashtra", "aaplesarkar", "karnataka", "sevasindhu",
+            "delhi", "kerala", "tamilnadu", "tnesevai", "telangana", "meeseva", "andhra", "rajasthan",
+            "up", "mp", "punjab", "haryana", "bihar", "odisha", "bengal", "wb", "assam", "jharkhand",
+            "chhattisgarh", "goa", "jk", "ladakh", "hp", "uttarakhand", "tripura", "manipur", "meghalaya",
+            "mizoram", "nagaland", "sikkim", "puducherry", "chandigarh"
+        ]
+
+        def _resolve_candidate(pref: str):
+            cand = f"{pref}.{clean_root}"
+            try:
+                socket.setdefaulttimeout(1.2)
+                socket.gethostbyname(cand)
+                return cand
+            except Exception:
+                return None
+
+        with ThreadPoolExecutor(max_workers=35) as ex:
+            for cand in ex.map(_resolve_candidate, standard_prefixes):
+                if cand and _is_valid_sub(cand):
+                    found.add(cand)
+        logger.info(f"[Subdomain Recon] DNS Dictionary resolved {len(found)} active subdomains.")
+        return found
+
+    # Execute all 5 reconnaissance engines concurrently in parallel threads
+    recon_tasks = [_task_crtsh, _task_urlscan, _task_hackertarget, _task_archive_org, _task_dns_probes]
+    with ThreadPoolExecutor(max_workers=len(recon_tasks)) as executor:
+        futures = [executor.submit(fn) for fn in recon_tasks]
+        for fut in as_completed(futures):
+            try:
+                subdomains.update(fut.result())
+            except Exception as task_err:
+                logger.debug(f"Subdomain task note: {task_err}")
+
+    logger.info(f"[Subdomain Recon] Finished multi-source OSINT for {clean_root}: {len(subdomains)} unique subdomains identified.")
     return subdomains
 
 

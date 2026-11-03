@@ -95,13 +95,13 @@ export async function executeCrawlerOnDomain(
       }
     });
 
-    // Timeout protection: kill after 25 seconds if hanging
+    // Timeout protection: kill after 180 seconds (3 mins) if hanging
     const timeoutHandle = setTimeout(() => {
       console.warn(`[CrawlerRunner] Timeout reached for ${targetUrl}. Terminating.`);
       try {
         child.kill();
       } catch (e) {}
-    }, 25000);
+    }, 180000);
 
     child.on('close', async (code) => {
       clearTimeout(timeoutHandle);

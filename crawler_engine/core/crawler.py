@@ -398,7 +398,7 @@ class WebCrawler:
 
         # Phase 1: OSINT Certificate Transparency & DNS Subdomain Discovery
         logger.info(f"[Subdomain Recon] Running OSINT discovery for: {self.root_domain}")
-        osint_subdomains = discover_subdomains_via_osint(self.root_domain, mongo_storage=self.mongo_storage)
+        osint_subdomains = discover_subdomains_via_osint(self.root_domain, timeout=30, mongo_storage=self.mongo_storage)
         for s in osint_subdomains:
             if s not in self.all_subdomains:
                 self.all_subdomains.add(s)
