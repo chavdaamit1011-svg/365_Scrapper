@@ -137,6 +137,13 @@ export default function DashboardPage() {
     }
   };
 
+  const handleSyncAll = async () => {
+    await Promise.all([
+      fetchUsers(),
+      crawler.refreshResults(),
+    ]);
+  };
+
   const handleLogout = () => {
     clearClientSession();
     router.replace('/login');
@@ -323,10 +330,10 @@ export default function DashboardPage() {
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={fetchUsers}
+                onClick={handleSyncAll}
                 isLoading={isLoadingUsers}
                 leftIcon={<RefreshCw size={13} />}
-                title="Sync database and users"
+                title="Sync database, intelligence, and users"
               >
                 Sync Database
               </Button>

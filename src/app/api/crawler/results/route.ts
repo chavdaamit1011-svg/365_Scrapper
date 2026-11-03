@@ -15,7 +15,7 @@ export async function GET() {
 
     // Query all records directly from MongoDB the_scraper.scraped_results
     const docs = await MongoScrapedResultModel.find({})
-      .sort({ createdAt: -1 })
+      .sort({ updatedAt: -1, _id: -1 })
       .limit(1000)
       .lean();
 
@@ -34,7 +34,7 @@ export async function GET() {
       countryFlag: d.countryFlag || '🌐',
       status: d.status || 'RESOLVED',
       pagesCrawled: d.pagesCrawled || 0,
-      discoveredAt: d.discoveredAt || d.createdAt || new Date().toISOString(),
+      discoveredAt: d.discoveredAt || d.createdAt || d.updatedAt || new Date().toISOString(),
     }));
 
     return NextResponse.json({

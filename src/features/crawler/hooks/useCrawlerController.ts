@@ -38,36 +38,39 @@ export function useCrawlerController(
   const isPausedRef = useRef<boolean>(false);
   const elapsedTimerRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Fetch fresh results from MongoDB API
+  const fetchMongoResults = useCallback(async () => {
+    try {
+      const res = await fetch('/api/crawler/results');
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
+        setScrapedResults(json.data);
+        return json.data;
+      }
+    } catch (err) {
+      console.warn('Could not fetch MongoDB scraped results:', err);
+    }
+
+    // Local storage fallback
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY_RESULTS);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setScrapedResults(parsed);
+          return parsed;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not read cached scraped results:', e);
+    }
+    return [];
+  }, []);
+
   // Hydrate scraped results from MongoDB on mount
   useEffect(() => {
-    const fetchMongoResults = async () => {
-      try {
-        const res = await fetch('/api/crawler/results');
-        const json = await res.json();
-        if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-          setScrapedResults(json.data);
-          return;
-        }
-      } catch (err) {
-        console.warn('Could not fetch MongoDB scraped results:', err);
-      }
-
-      // Local storage fallback
-      try {
-        const stored = localStorage.getItem(STORAGE_KEY_RESULTS);
-        if (stored) {
-          const parsed = JSON.parse(stored);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setScrapedResults(parsed);
-          }
-        }
-      } catch (e) {
-        console.warn('Could not read cached scraped results:', e);
-      }
-    };
-
     fetchMongoResults();
-  }, []);
+  }, [fetchMongoResults]);
 
   // Save to localStorage whenever scrapedResults change
   useEffect(() => {
@@ -149,16 +152,71 @@ export function useCrawlerController(
         }
       }, 7000);
 
+      const interactiveMaxPages = 10;
+      const interactiveMaxDepth = 2;
+
       try {
-        await fetch('/api/crawler/run', {
+        // Enqueue job via Redis API route /api/crawl-jobs (Component 1 of PDF)
+        const jobRes = await fetch('/api/crawl-jobs', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             domain: currentTarget.domain,
-            maxPages: 5,
-            maxDepth: 2,
+            max_pages: interactiveMaxPages,
+            max_depth: interactiveMaxDepth,
+            requests_per_second: 1,
+            respect_robots_txt: true,
           }),
         });
+
+        const jobJson = await jobRes.json();
+        const jobId = jobJson.job_id;
+
+        // Poll Redis job status until completed or generous timeout
+        let isDone = false;
+        let pollAttempts = 0;
+        const maxPollAttempts = 120; // Up to 96 seconds maximum
+
+        while (!isDone && pollAttempts < maxPollAttempts && !isCancelledRef.current && !isPausedRef.current) {
+          await new Promise((r) => setTimeout(r, 800));
+          pollAttempts++;
+
+          if (jobId) {
+            try {
+              const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
+              const statusJson = await statusRes.json();
+              if (statusJson.success && statusJson.job) {
+                const j = statusJson.job;
+                if (j.status === 'completed' || j.status === 'failed') {
+                  isDone = true;
+                }
+
+                // Live Redis telemetry to UI cards
+                if (typeof j.subdomainsCount === 'number' || typeof j.emailsCount === 'number') {
+                  setActiveTargetResult({
+                    subdomains: j.subdomainsCount || 0,
+                    emails: j.emailsCount || 0,
+                  });
+                }
+                if (j.pagesCrawled && j.pagesCrawled > 0) {
+                  setActivePhase(`Deep Crawling: Page ${j.pagesCrawled}/${interactiveMaxPages}`);
+                  setTargetSubProgress(Math.min(95, Math.round((j.pagesCrawled / interactiveMaxPages) * 70) + 25));
+                }
+              }
+            } catch {}
+          }
+
+          // Live database streaming: sync table every 3 polls (~2.4s) so new domains pop up immediately!
+          if (pollAttempts % 3 === 0) {
+            try {
+              const liveRes = await fetch('/api/crawler/results');
+              const liveJson = await liveRes.json();
+              if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
+                setScrapedResults(liveJson.data);
+              }
+            } catch {}
+          }
+        }
       } catch (err) {
         console.warn(`[Crawler] Network error crawling ${currentTarget.domain}:`, err);
       } finally {
@@ -175,35 +233,44 @@ export function useCrawlerController(
         return;
       }
 
-      // Fetch fresh consolidated state directly from MongoDB
-      try {
-        const freshRes = await fetch('/api/crawler/results');
-        const freshJson = await freshRes.json();
-        if (freshJson.success && Array.isArray(freshJson.data)) {
-          setScrapedResults(freshJson.data);
+      // Fetch fresh consolidated state directly from MongoDB with retry
+      let foundTargetInMongo = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const freshRes = await fetch('/api/crawler/results');
+          const freshJson = await freshRes.json();
+          if (freshJson.success && Array.isArray(freshJson.data) && freshJson.data.length > 0) {
+            setScrapedResults(freshJson.data);
 
-          // Find this specific target record to get its exact subdomains and emails
-          const matched = freshJson.data.find((r: ScrapedDataRecord) => {
-            const d1 = (r.domain || r.rootDomain || '').toLowerCase().trim();
-            const d2 = currentTarget.domain.toLowerCase().trim();
-            return d1 === d2 || d1.includes(d2) || d2.includes(d1);
-          });
-
-          if (matched) {
-            const subs = Array.isArray(matched.subdomains)
-              ? matched.subdomains.filter((s: string) => s.toLowerCase() !== matched.domain.toLowerCase())
-              : [];
-            const ems = Array.isArray(matched.emails)
-              ? matched.emails
-              : (matched.email ? [matched.email] : []);
-
-            setActiveTargetResult({
-              subdomains: subs.length,
-              emails: ems.length,
+            // Find this specific target record to get its exact subdomains and emails
+            const matched = freshJson.data.find((r: ScrapedDataRecord) => {
+              const d1 = (r.domain || r.rootDomain || '').toLowerCase().trim();
+              const d2 = currentTarget.domain.toLowerCase().trim();
+              return d1 === d2 || d1.includes(d2) || d2.includes(d1);
             });
+
+            if (matched) {
+              foundTargetInMongo = true;
+              const subs = Array.isArray(matched.subdomains)
+                ? matched.subdomains.filter((s: string) => s.toLowerCase() !== matched.domain.toLowerCase())
+                : [];
+              const ems = Array.isArray(matched.emails)
+                ? matched.emails
+                : (matched.email ? [matched.email] : []);
+
+              setActiveTargetResult({
+                subdomains: subs.length,
+                emails: ems.length,
+              });
+              break;
+            }
           }
+        } catch (e) {}
+
+        if (!foundTargetInMongo && attempt < 2) {
+          await new Promise((r) => setTimeout(r, 600));
         }
-      } catch (e) {}
+      }
 
       // Increment processed targets count
       setProcessedTargetsCount((prev) => prev + 1);
@@ -346,5 +413,6 @@ export function useCrawlerController(
     resumeCrawler,
     cancelCrawler,
     clearResults,
+    refreshResults: fetchMongoResults,
   };
 }

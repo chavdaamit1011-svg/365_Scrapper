@@ -55,11 +55,20 @@ class MongoStorage:
 
         inserted_count = 0
         try:
+            import datetime
+            now_iso = datetime.datetime.utcnow().isoformat()
             for r in records:
-                record_id = r.get("id") or f"scrape_{hash(r.get('domain', '') + r.get('email', ''))}"
+                record_id = r.get("id") or f"domain_{r.get('domain', '')}"
+                r_copy = dict(r)
+                r_copy["updatedAt"] = now_iso
+                created_at = r_copy.pop("createdAt", now_iso)
+                
                 self.collection.update_one(
                     {"id": record_id},
-                    {"$set": r},
+                    {
+                        "$set": r_copy,
+                        "$setOnInsert": {"createdAt": created_at}
+                    },
                     upsert=True
                 )
                 inserted_count += 1
@@ -68,3 +77,24 @@ class MongoStorage:
             logger.error(f"[MongoDB] Database sync error: {err}")
 
         return inserted_count
+
+    def save_raw_crawl_data(self, raw_data: Dict[str, Any]) -> bool:
+        """
+        Saves raw page-level crawl observations and history into `raw_crawl_data` collection
+        (Component 5 of PDF Architecture).
+        """
+        if not self.is_connected or self.db is None:
+            return False
+        try:
+            raw_coll = self.db["raw_crawl_data"]
+            crawl_id = raw_data.get("crawl_id")
+            if crawl_id:
+                raw_coll.update_one({"crawl_id": crawl_id}, {"$set": raw_data}, upsert=True)
+            else:
+                raw_coll.insert_one(raw_data)
+            logger.info(f"[MongoDB] Stored raw crawl observation history for {raw_data.get('domain')} into 'raw_crawl_data'.")
+            return True
+        except Exception as e:
+            logger.warning(f"[MongoDB] Failed to save raw crawl data: {e}")
+            return False
+

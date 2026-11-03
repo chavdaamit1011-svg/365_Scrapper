@@ -198,11 +198,51 @@ class WebCrawler:
 
             time.sleep(1.0)
 
+        # Fallback to Playwright if static requests failed completely
+        if self.playwright_engine:
+            logger.info(f"[Playwright Fallback] Static request failed for {url}. Attempting headless browser render...")
+            rendered = self.playwright_engine.render_page(url)
+            if rendered and len(rendered) > 100:
+                return rendered, 200, "text/html"
+
         return None
 
-    def run(self) -> Dict[str, Any]:
+    def _sync_checkpoint_to_mongo(self, status: str = "CRAWLING"):
+        """
+        Saves early / incremental progress directly to MongoDB so the frontend
+        and database immediately reflect the discovered intelligence within 2 seconds.
+        """
+        try:
+            country_name, country_code, country_flag = detect_country_from_domain(self.root_domain)
+            sorted_emails = sorted(list(self.all_emails))
+            sorted_subdomains = sorted(list(self.all_subdomains))
+
+            domain_record = {
+                "id": f"domain_{self.root_domain}",
+                "domain": self.root_domain,
+                "rootDomain": self.root_domain,
+                "subdomain": self.starting_netloc,
+                "subdomains": sorted_subdomains,
+                "subdomainCount": len(sorted_subdomains),
+                "email": sorted_emails[0] if sorted_emails else "",
+                "emails": sorted_emails,
+                "emailCount": len(sorted_emails),
+                "country": country_name,
+                "countryCode": country_code,
+                "countryFlag": country_flag,
+                "status": status,
+                "sourceUrl": self.start_url,
+                "pagesCrawled": len(self.visited_records),
+                "discoveredAt": datetime.datetime.now().isoformat(),
+            }
+            self.mongo_storage.sync_scraped_results([domain_record])
+        except Exception as e:
+            logger.warning(f"Failed checkpoint sync to MongoDB: {e}")
+
+    def run(self, on_progress=None) -> Dict[str, Any]:
         """
         Executes the crawl starting from start_url using Breadth-First Search.
+        Accepts optional on_progress(pages_crawled, subdomains_count, emails_count) callback.
         """
         logger.info("=" * 60)
         logger.info(f"STARTING CRAWL ON: {self.start_url}")
@@ -225,6 +265,15 @@ class WebCrawler:
                     "timestamp": datetime.datetime.now().isoformat(),
                 })
                 logger.info(f"  [+] Discovered Subdomain (OSINT): {s}")
+
+        # Checkpoint 1: Immediate MongoDB sync with discovered OSINT subdomains within ~1.5s
+        logger.info(f"[Checkpoint 1] Saving initial OSINT intelligence for {self.root_domain} to MongoDB...")
+        self._sync_checkpoint_to_mongo(status="DISCOVERING")
+        if on_progress:
+            try:
+                on_progress(0, len(self.all_subdomains), len(self.all_emails))
+            except Exception:
+                pass
 
         # Queue items format: (url, current_depth)
         queue: List[Tuple[str, int]] = [(self.start_url, 0)]
@@ -329,6 +378,17 @@ class WebCrawler:
                             self.queued_urls.add(link)
                             queue.append((link, depth + 1))
 
+                # Incremental Checkpoint: Sync to MongoDB so UI updates live
+                if pages_crawled == 1 or new_subdomains or emails or (pages_crawled % 3 == 0):
+                    self._sync_checkpoint_to_mongo(status="CRAWLING")
+
+                # Stream live progress updates to Redis/Worker if callback provided
+                if on_progress:
+                    try:
+                        on_progress(pages_crawled, len(self.all_subdomains), len(self.all_emails))
+                    except Exception:
+                        pass
+
                 # Polite delay between requests
                 delay = self.config.get("delay", 0.5)
                 if delay > 0 and queue:
@@ -348,12 +408,36 @@ class WebCrawler:
         self.file_storage.save_external_links(self.external_link_records)
         self.file_storage.save_metadata(self.metadata_records)
 
-        # Sync with MongoDB / Portal (Domain Consolidated Structure)
-        logger.info("Synchronizing domain consolidated data with MongoDB / Portal...")
-
+        # Component 5 of PDF Architecture: Save raw crawl observations to MongoDB
+        logger.info("Saving raw crawl observations to MongoDB collection 'raw_crawl_data'...")
         country_name, country_code, country_flag = detect_country_from_domain(self.root_domain)
         sorted_emails = sorted(list(self.all_emails))
         sorted_subdomains = sorted(list(self.all_subdomains))
+
+        raw_crawl_doc = {
+            "crawl_id": self.config.get("job_id") or f"crawl_{int(time.time())}",
+            "domain": self.root_domain,
+            "starting_host": self.starting_netloc,
+            "pages": [
+                {
+                    "url": r["url"],
+                    "status_code": r.get("status_code", 200),
+                    "depth": r.get("depth", 0),
+                    "timestamp": r.get("timestamp"),
+                }
+                for r in self.visited_records
+            ],
+            "subdomains": sorted_subdomains,
+            "subdomain_count": len(sorted_subdomains),
+            "emails": sorted_emails,
+            "email_count": len(sorted_emails),
+            "country_signals": [country_name] if country_name != "Global" else [],
+            "crawled_at": datetime.datetime.now().isoformat(),
+        }
+        self.mongo_storage.save_raw_crawl_data(raw_crawl_doc)
+
+        # Sync with MongoDB / Portal (Domain Consolidated Structure)
+        logger.info("Synchronizing domain consolidated data with MongoDB / Portal...")
 
         domain_record = {
             "id": f"domain_{self.root_domain}",

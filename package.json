@@ -11,6 +11,7 @@
   "dependencies": {
     "bcryptjs": "^3.0.3",
     "framer-motion": "^12.42.2",
+    "ioredis": "^6.0.0",
     "lucide-react": "^1.21.0",
     "mongoose": "^9.7.4",
     "next": "16.2.10",
@@ -20,6 +21,7 @@
   },
   "devDependencies": {
     "@types/node": "^20",
+    "@types/nodemailer": "^8.0.2",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "typescript": "^5"

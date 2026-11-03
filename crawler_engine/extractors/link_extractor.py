@@ -180,4 +180,18 @@ def extract_links_and_subdomains(
         if found_host != starting_host and found_host.endswith(f".{root_domain}"):
             subdomains.add(found_host)
 
+    # 4. Extract Next.js / SPA internal routes from JSON state (__NEXT_DATA__)
+    for next_script in soup.find_all("script", id="__NEXT_DATA__"):
+        try:
+            raw_text = next_script.string or ""
+            path_matches = re.findall(r'"(/[a-zA-Z0-9_\-\/]+)"', raw_text)
+            for p in path_matches:
+                if not any(p.endswith(ext) for ext in (".js", ".css", ".png", ".jpg", ".svg", ".json", ".ico")):
+                    cand_url = urljoin(base_url, p)
+                    norm = normalize_url(cand_url)
+                    if norm and urlparse(norm).netloc.lower().split(":")[0] == starting_host:
+                        internal_links.add(norm)
+        except Exception:
+            pass
+
     return internal_links, external_links, subdomains

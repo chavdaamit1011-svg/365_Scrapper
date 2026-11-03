@@ -21,6 +21,7 @@ dist/
 # Local runtime data / caches
 .screpper-data.json
 .screpper-scraped.json
+.screpper-redis-queue.json
 the_scraper_scraped_results*
 
 # Python caches and crawler output
