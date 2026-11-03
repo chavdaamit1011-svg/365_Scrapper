@@ -30,6 +30,7 @@ from crawler_engine.extractors.site_classifier import classify_website_content
 from crawler_engine.storage.file_storage import LocalFileStorage
 from crawler_engine.storage.mongo_storage import MongoStorage
 from crawler_engine.core.playwright_engine import PlaywrightCrawlerEngine
+from crawler_engine.pipeline import ReconciliationEngine
 
 # Setup Logger
 logger = logging.getLogger("TheScrapper.Crawler")
@@ -96,6 +97,8 @@ class WebCrawler:
             db_name=self.config["mongodb_db"],
             collection_name=self.config["mongodb_collection"],
         )
+        # Phase 2: Reconciliation & Master Relational Storage Engine (Components 8, 10, 11)
+        self.reconciliation_engine = ReconciliationEngine(mongo_storage=self.mongo_storage)
 
         # HTTP Session with default headers
         self.session = requests.Session()
@@ -809,6 +812,13 @@ class WebCrawler:
             "crawledPages": crawled_pages_list,
             "discoveredAt": datetime.datetime.now().isoformat(),
         }
+
+        # Phase 2: Execute Reconciliation (Old vs New Crawl diff, SHA-256 IDs & audit log)
+        try:
+            reconciliation_stats = self.reconciliation_engine.reconcile_crawl_result(domain_record)
+            domain_record["reconciliation"] = reconciliation_stats
+        except Exception as rec_err:
+            logger.warning(f"[Reconciliation Engine Notice]: {rec_err}")
 
         self.portal_records = [domain_record]
         self.mongo_storage.sync_scraped_results(self.portal_records)

@@ -33,6 +33,18 @@ export interface CrawledPageDetail {
   timestamp?: string;
 }
 
+export interface ReconciliationStats {
+  domain: string;
+  domain_action: 'NEW' | 'CHANGED' | 'SAME';
+  new_subdomains: number;
+  existing_subdomains: number;
+  missing_subdomains: number;
+  new_emails: number;
+  existing_emails: number;
+  missing_emails: number;
+  audit_changes_recorded: number;
+}
+
 export interface ScrapedDataRecord {
   id: string;
   targetId?: string;
@@ -60,6 +72,7 @@ export interface ScrapedDataRecord {
   status: CrawlRecordStatus;
   errorCode?: string;
   errorTitle?: string;
+  reconciliation?: ReconciliationStats;
   pagesCrawled?: number;
   discoveredAt: string;
 }

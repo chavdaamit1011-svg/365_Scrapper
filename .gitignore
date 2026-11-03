@@ -23,6 +23,8 @@ dist/
 .screpper-scraped.json
 .screpper-redis-queue.json
 the_scraper_scraped_results*
+*.db
+*.sqlite
 
 # Python caches and crawler output
 __pycache__/

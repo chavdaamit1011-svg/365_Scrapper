@@ -179,6 +179,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           summary: effectiveSummary,
           errorCode: r.errorCode,
           errorTitle: r.errorTitle,
+          reconciliation: r.reconciliation,
           subdomains: Array.from(new Set(subList)),
           subdomainCount: subList.length,
           email: rankedEmails[0] || '',
@@ -199,6 +200,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           if (r.summary) existing.summary = r.summary;
           if (r.errorCode) existing.errorCode = r.errorCode;
           if (r.errorTitle) existing.errorTitle = r.errorTitle;
+          if (r.reconciliation) existing.reconciliation = r.reconciliation;
           existing.pagesCrawled = 0;
         }
 
@@ -1131,6 +1133,45 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                         </a>
                                       );
                                     })}
+                                  </div>
+                                )}
+
+                                {r.reconciliation && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingTop: '4px', borderTop: '1px dashed #e2e8f0' }}>
+                                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#475569' }}>Reconciliation:</span>
+                                    <span
+                                      style={{
+                                        fontSize: '10px',
+                                        fontWeight: 700,
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        background: r.reconciliation.domain_action === 'NEW' ? '#dcfce7' : r.reconciliation.domain_action === 'CHANGED' ? '#fef3c7' : '#f1f5f9',
+                                        color: r.reconciliation.domain_action === 'NEW' ? '#15803d' : r.reconciliation.domain_action === 'CHANGED' ? '#b45309' : '#475569',
+                                        border: `1px solid ${r.reconciliation.domain_action === 'NEW' ? '#86efac' : r.reconciliation.domain_action === 'CHANGED' ? '#fde68a' : '#cbd5e1'}`,
+                                      }}
+                                    >
+                                      {r.reconciliation.domain_action === 'NEW' ? '✨ New Master Record' : r.reconciliation.domain_action === 'CHANGED' ? '🔄 Updated (Changed)' : '✓ Unchanged (Same)'}
+                                    </span>
+                                    {r.reconciliation.new_subdomains > 0 && (
+                                      <span style={{ fontSize: '10px', color: '#047857', fontWeight: 600, background: '#ecfdf5', padding: '1px 5px', borderRadius: '3px' }}>
+                                        +{r.reconciliation.new_subdomains} subdomains
+                                      </span>
+                                    )}
+                                    {r.reconciliation.new_emails > 0 && (
+                                      <span style={{ fontSize: '10px', color: '#047857', fontWeight: 600, background: '#ecfdf5', padding: '1px 5px', borderRadius: '3px' }}>
+                                        +{r.reconciliation.new_emails} emails
+                                      </span>
+                                    )}
+                                    {r.reconciliation.missing_subdomains > 0 && (
+                                      <span style={{ fontSize: '10px', color: '#b45309', fontWeight: 600, background: '#fef3c7', padding: '1px 5px', borderRadius: '3px' }}>
+                                        ⚠️ {r.reconciliation.missing_subdomains} missing (recheck)
+                                      </span>
+                                    )}
+                                    {r.reconciliation.audit_changes_recorded > 0 && (
+                                      <span style={{ fontSize: '10px', color: '#64748b' }}>
+                                        ({r.reconciliation.audit_changes_recorded} audit diffs logged)
+                                      </span>
+                                    )}
                                   </div>
                                 )}
                               </div>
