@@ -1,6 +1,7 @@
 import re
 import logging
-from typing import Set, Optional
+from typing import Set, List, Optional
+from bs4 import BeautifulSoup
 
 logger = logging.getLogger("TheScrapper.EmailExtractor")
 
@@ -27,11 +28,43 @@ DUMMY_DOMAINS = {
     "yourdomain.com", "mycompany.com"
 }
 
-# Placeholder usernames in contact form templates
-DUMMY_USERNAMES = {
+# Non-human, automated, policy/legal, and dummy email prefixes to strictly exclude
+EXCLUDED_EMAIL_PREFIXES = {
+    # System & Automated No-Reply addresses
+    "noreply", "no-reply", "donotreply", "do-not-reply", "mailer-daemon",
+    "postmaster", "hostmaster", "webmaster", "daemon", "root", "bounce",
+    "bounce-handler", "auto-reply", "notification", "notifications", "alerts",
+    "alert", "system", "git", "github", "gitlab", "jira", "sentry",
+    "auto-confirm", "no_reply", "do_not_reply",
+
+    # Policy, Legal, Cookie & Compliance boilerplates (NOT general contact)
+    "privacy", "legal", "dpo", "gdpr", "compliance", "copyright",
+    "disclaimer", "terms", "abuse", "security", "unsubscribe",
+    "command", "branch", "internal",
+
+    # Dummy placeholders & demo templates
     "you", "your-name", "yourname", "username", "user", "name", "email",
     "test", "placeholder", "demo", "sample", "example", "abc", "xyz",
-    "john.doe", "johndoe", "janedoe", "jane.doe", "admin@admin"
+    "john.doe", "johndoe", "janedoe", "jane.doe", "admin@admin",
+}
+
+# High-priority corporate contact prefixes with weighted scores
+PRIMARY_CONTACT_PREFIXES = {
+    "contact": 100,
+    "info": 95,
+    "support": 90,
+    "hello": 85,
+    "sales": 80,
+    "enquiry": 80,
+    "enquiries": 80,
+    "office": 75,
+    "admin": 70,
+    "help": 70,
+    "customercare": 70,
+    "care": 65,
+    "connect": 65,
+    "mail": 60,
+    "team": 50,
 }
 
 # Legitimate public email service domains frequently used by real business owners
@@ -44,14 +77,15 @@ ALLOWED_PUBLIC_MAIL_PROVIDERS = {
 def is_valid_email(email: str, target_root_domain: Optional[str] = None) -> bool:
     """
     Validates that an email is legitimate, not a template placeholder,
-    and belongs to the target domain or legitimate public mail providers.
+    not a system/legal policy address, and belongs to the target domain or
+    a legitimate public mail provider.
     """
     if not email or "@" not in email:
         return False
 
     lower = email.lower().strip()
 
-    # 1. Check if ends with static asset extensions (e.g. image@2x.png)
+    # 1. Reject static asset file extensions
     for ext in IGNORED_EXTENSIONS:
         if lower.endswith(ext):
             return False
@@ -63,21 +97,23 @@ def is_valid_email(email: str, target_root_domain: Optional[str] = None) -> bool
 
     username, domain_part = parts[0], parts[1]
 
-    # Reject if domain is malformed
+    # Reject malformed domain part
     if "." not in domain_part or len(domain_part) < 4:
         return False
 
-    # 3. Reject template placeholder domains
+    # 3. Reject placeholder dummy domains
     if domain_part in DUMMY_DOMAINS:
         return False
 
-    # 4. Reject template placeholder usernames (e.g. you@..., username@...)
-    if username in DUMMY_USERNAMES:
+    # 4. Check for excluded prefixes (system, automated, policy/legal, placeholders)
+    clean_username = username.split("+")[0]
+    user_tokens = re.split(r"[._-]", clean_username)
+    if username in EXCLUDED_EMAIL_PREFIXES or any(token in EXCLUDED_EMAIL_PREFIXES for token in user_tokens):
         return False
 
-    # 5. If target_root_domain is provided, prioritize domain alignment
+    # 5. If target_root_domain is provided, strictly enforce domain alignment
     if target_root_domain:
-        clean_target = target_root_domain.lower().strip()
+        clean_target = target_root_domain.lower().strip().replace("www.", "")
         is_domain_match = (
             domain_part == clean_target
             or domain_part.endswith(f".{clean_target}")
@@ -91,16 +127,64 @@ def is_valid_email(email: str, target_root_domain: Optional[str] = None) -> bool
     return True
 
 
+def get_email_priority_score(email: str, root_domain: str = "") -> int:
+    """
+    Ranks extracted emails by business importance so corporate contact emails
+    (contact@, info@, support@) are ALWAYS ranked above city branches or department emails.
+    """
+    if not email or "@" not in email:
+        return 0
+
+    lower = email.lower().strip()
+    username, domain = lower.split("@", 1)
+
+    # Clean username tokens (e.g. contact.team -> contact)
+    user_tokens = re.split(r"[._-]", username)
+    first_token = user_tokens[0] if user_tokens else username
+
+    score = 20  # Base score for verified email
+
+    if username in PRIMARY_CONTACT_PREFIXES:
+        score += PRIMARY_CONTACT_PREFIXES[username]
+    elif first_token in PRIMARY_CONTACT_PREFIXES:
+        score += PRIMARY_CONTACT_PREFIXES[first_token] - 5
+    elif any(token in PRIMARY_CONTACT_PREFIXES for token in user_tokens):
+        score += 50
+
+    # Exact target domain match bonus
+    if root_domain:
+        clean_target = root_domain.lower().strip().replace("www.", "")
+        if domain == clean_target or domain == f"www.{clean_target}":
+            score += 40
+
+    return score
+
+
+def rank_emails_by_relevance(emails: List[str], root_domain: str = "") -> List[str]:
+    """
+    Sorts emails with priority scoring so the primary official contact email is at index 0.
+    """
+    unique_emails = list(dict.fromkeys(emails))
+    return sorted(
+        unique_emails,
+        key=lambda e: (get_email_priority_score(e, root_domain), e),
+        reverse=True
+    )
+
+
 def extract_emails_from_html(
-    soup, raw_html: str = "", target_root_domain: Optional[str] = None
+    soup: BeautifulSoup, raw_html: str = "", target_root_domain: Optional[str] = None
 ) -> Set[str]:
     """
-    Extracts publicly visible, verified email addresses from HTML text, mailto: attributes,
-    and raw source code. Strictly rejects fake template emails like you@company.com.
+    Extracts publicly visible, verified email addresses from HTML text and mailto: attributes.
+    Excludes scripts, style blocks, hidden inputs, and system/legal boilerplates.
     """
     found_emails: Set[str] = set()
 
-    # 1. Extract from mailto: links (highest fidelity)
+    if not soup:
+        return found_emails
+
+    # 1. Extract from explicit mailto: links (highest fidelity)
     for a_tag in soup.find_all("a", href=True):
         href = a_tag["href"].strip()
         if href.lower().startswith("mailto:"):
@@ -110,23 +194,32 @@ def extract_emails_from_html(
                 if is_valid_email(candidate, target_root_domain):
                     found_emails.add(candidate)
 
-    # 2. Extract from page visible text (inside body tags, excluding inputs)
-    # Remove script, style, and input placeholders from inspection
-    text_content = ""
-    for elem in soup.find_all(["p", "span", "div", "a", "li", "td", "h1", "h2", "h3", "h4", "footer"]):
-        # Skip input placeholder text
-        text_content += " " + elem.get_text(separator=" ")
+    # 2. Extract from page visible text with non-content elements stripped
+    # Clone or clean soup by removing scripts, styles, noscript, svg, inputs
+    try:
+        # Extract from high-value semantic tags first (footer, header, address, nav)
+        semantic_containers = soup.find_all(["footer", "header", "address", "main", "section"])
+        for container in semantic_containers:
+            container_text = container.get_text(separator=" ")
+            for match in EMAIL_REGEX.finditer(container_text):
+                candidate = match.group(0).strip().lower()
+                if is_valid_email(candidate, target_root_domain):
+                    found_emails.add(candidate)
 
-    for match in EMAIL_REGEX.finditer(text_content):
-        candidate = match.group(0).strip().lower()
-        if is_valid_email(candidate, target_root_domain):
-            found_emails.add(candidate)
-
-    # 3. Extract from raw HTML if mailto: was embedded in scripts or json
-    if raw_html:
-        for match in EMAIL_REGEX.finditer(raw_html):
-            candidate = match.group(0).strip().lower()
-            if is_valid_email(candidate, target_root_domain):
-                found_emails.add(candidate)
+        # General body text extraction
+        body = soup.find("body") or soup
+        # Collect text from readable elements
+        for elem in body.find_all(["p", "span", "div", "li", "td", "h1", "h2", "h3", "h4"]):
+            # Ignore script, style, and input elements
+            if elem.name in ("script", "style", "noscript", "svg", "input", "textarea"):
+                continue
+            text = elem.get_text(separator=" ")
+            if "@" in text:
+                for match in EMAIL_REGEX.finditer(text):
+                    candidate = match.group(0).strip().lower()
+                    if is_valid_email(candidate, target_root_domain):
+                        found_emails.add(candidate)
+    except Exception as e:
+        logger.warning(f"Error parsing visible text for emails: {e}")
 
     return found_emails

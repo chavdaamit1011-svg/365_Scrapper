@@ -16,7 +16,7 @@ from crawler_engine.extractors.link_extractor import (
     discover_subdomains_via_osint,
     detect_country_from_domain,
 )
-from crawler_engine.extractors.email_extractor import extract_emails_from_html
+from crawler_engine.extractors.email_extractor import extract_emails_from_html, rank_emails_by_relevance
 from crawler_engine.extractors.metadata_extractor import extract_page_metadata
 from crawler_engine.storage.file_storage import LocalFileStorage
 from crawler_engine.storage.mongo_storage import MongoStorage
@@ -214,7 +214,7 @@ class WebCrawler:
         """
         try:
             country_name, country_code, country_flag = detect_country_from_domain(self.root_domain)
-            sorted_emails = sorted(list(self.all_emails))
+            ranked_emails = rank_emails_by_relevance(list(self.all_emails), root_domain=self.root_domain)
             sorted_subdomains = sorted(list(self.all_subdomains))
 
             domain_record = {
@@ -224,9 +224,9 @@ class WebCrawler:
                 "subdomain": self.starting_netloc,
                 "subdomains": sorted_subdomains,
                 "subdomainCount": len(sorted_subdomains),
-                "email": sorted_emails[0] if sorted_emails else "",
-                "emails": sorted_emails,
-                "emailCount": len(sorted_emails),
+                "email": ranked_emails[0] if ranked_emails else "",
+                "emails": ranked_emails,
+                "emailCount": len(ranked_emails),
                 "country": country_name,
                 "countryCode": country_code,
                 "countryFlag": country_flag,
@@ -411,7 +411,7 @@ class WebCrawler:
         # Component 5 of PDF Architecture: Save raw crawl observations to MongoDB
         logger.info("Saving raw crawl observations to MongoDB collection 'raw_crawl_data'...")
         country_name, country_code, country_flag = detect_country_from_domain(self.root_domain)
-        sorted_emails = sorted(list(self.all_emails))
+        ranked_emails = rank_emails_by_relevance(list(self.all_emails), root_domain=self.root_domain)
         sorted_subdomains = sorted(list(self.all_subdomains))
 
         raw_crawl_doc = {
@@ -429,8 +429,8 @@ class WebCrawler:
             ],
             "subdomains": sorted_subdomains,
             "subdomain_count": len(sorted_subdomains),
-            "emails": sorted_emails,
-            "email_count": len(sorted_emails),
+            "emails": ranked_emails,
+            "email_count": len(ranked_emails),
             "country_signals": [country_name] if country_name != "Global" else [],
             "crawled_at": datetime.datetime.now().isoformat(),
         }
@@ -446,9 +446,9 @@ class WebCrawler:
             "subdomain": self.starting_netloc,
             "subdomains": sorted_subdomains,
             "subdomainCount": len(sorted_subdomains),
-            "email": sorted_emails[0] if sorted_emails else "",
-            "emails": sorted_emails,
-            "emailCount": len(sorted_emails),
+            "email": ranked_emails[0] if ranked_emails else "",
+            "emails": ranked_emails,
+            "emailCount": len(ranked_emails),
             "country": country_name,
             "countryCode": country_code,
             "countryFlag": country_flag,

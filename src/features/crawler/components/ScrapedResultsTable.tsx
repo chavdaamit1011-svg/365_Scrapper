@@ -29,6 +29,73 @@ interface ScrapedResultsTableProps {
   onClearResults?: () => void;
 }
 
+const EXCLUDED_EMAIL_PREFIXES = new Set([
+  'noreply', 'no-reply', 'donotreply', 'do-not-reply', 'mailer-daemon',
+  'postmaster', 'hostmaster', 'webmaster', 'daemon', 'root', 'bounce',
+  'privacy', 'legal', 'dpo', 'gdpr', 'compliance', 'disclaimer', 'terms',
+  'abuse', 'security', 'notification', 'notifications', 'alert', 'alerts',
+  'you', 'yourname', 'username', 'test', 'demo', 'sample', 'example',
+  'admin@admin', 'ncr.command', 'command',
+]);
+
+const PRIMARY_PREFIX_WEIGHTS: Record<string, number> = {
+  contact: 100,
+  info: 95,
+  support: 90,
+  hello: 85,
+  sales: 80,
+  enquiry: 80,
+  enquiries: 80,
+  office: 75,
+  admin: 70,
+  help: 70,
+  customercare: 70,
+  care: 65,
+  connect: 65,
+  mail: 60,
+  team: 50,
+};
+
+function getEmailScore(email: string, targetDomain: string): number {
+  if (!email || !email.includes('@')) return -999;
+  const lower = email.toLowerCase().trim();
+  const [user, domain] = lower.split('@');
+  const cleanUser = user.split('+')[0];
+  const tokens = cleanUser.split(/[._-]/);
+
+  // Check if excluded
+  if (EXCLUDED_EMAIL_PREFIXES.has(cleanUser) || tokens.some((t) => EXCLUDED_EMAIL_PREFIXES.has(t))) {
+    return -999;
+  }
+
+  let score = 20;
+  if (PRIMARY_PREFIX_WEIGHTS[cleanUser]) {
+    score += PRIMARY_PREFIX_WEIGHTS[cleanUser];
+  } else if (tokens[0] && PRIMARY_PREFIX_WEIGHTS[tokens[0]]) {
+    score += PRIMARY_PREFIX_WEIGHTS[tokens[0]] - 5;
+  }
+
+  // Exact target domain match
+  const cleanTarget = targetDomain.toLowerCase().trim().replace(/^www\./, '');
+  if (domain === cleanTarget || domain === `www.${cleanTarget}`) {
+    score += 40;
+  }
+
+  return score;
+}
+
+function rankAndFilterEmails(emails: string[], targetDomain: string): string[] {
+  const cleanList = Array.from(new Set(emails.map((e) => e.toLowerCase().trim()))).filter((e) => {
+    return getEmailScore(e, targetDomain) > 0;
+  });
+
+  return cleanList.sort((a, b) => {
+    const scoreA = getEmailScore(a, targetDomain);
+    const scoreB = getEmailScore(b, targetDomain);
+    return scoreB - scoreA;
+  });
+}
+
 export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   records,
   isCrawling,
@@ -56,13 +123,14 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         subList.push(r.subdomain);
       }
 
-      // Collect all emails
-      const emailList: string[] = [];
+      // Collect and rank all emails with corporate priority
+      const rawEmailList: string[] = [];
       if (Array.isArray(r.emails) && r.emails.length > 0) {
-        emailList.push(...r.emails);
+        rawEmailList.push(...r.emails);
       } else if (r.email) {
-        emailList.push(r.email);
+        rawEmailList.push(r.email);
       }
+      const rankedEmails = rankAndFilterEmails(rawEmailList, domainKey);
 
       if (!existing) {
         map.set(domainKey, {
@@ -71,14 +139,15 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           domain: domainKey,
           subdomains: Array.from(new Set(subList)),
           subdomainCount: subList.length,
-          emails: Array.from(new Set(emailList)),
-          emailCount: emailList.length,
+          email: rankedEmails[0] || '',
+          emails: rankedEmails,
+          emailCount: rankedEmails.length,
           pagesCrawled: r.pagesCrawled || 1,
         });
       } else {
         // Merge subdomains and emails
         const mergedSubs = Array.from(new Set([...(existing.subdomains || []), ...subList]));
-        const mergedEmails = Array.from(new Set([...(existing.emails || []), ...emailList]));
+        const mergedEmails = rankAndFilterEmails([...(existing.emails || []), ...rawEmailList], domainKey);
 
         existing.subdomains = mergedSubs;
         existing.subdomainCount = mergedSubs.length;
@@ -512,28 +581,46 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                           </span>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
-                            {emails.slice(0, 2).map((email) => (
-                              <div key={email} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                <Mail size={13} color="#0284c7" style={{ flexShrink: 0 }} />
-                                <span style={{ color: 'var(--text-main)', fontWeight: 500, fontSize: '12.5px' }}>
-                                  {email}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleCopy(email, `${r.id}_${email}`)}
-                                  title="Copy email"
-                                  style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    cursor: 'pointer',
-                                    padding: '2px',
-                                    color: copiedId === `${r.id}_${email}` ? '#10b981' : '#94a3b8',
-                                  }}
-                                >
-                                  {copiedId === `${r.id}_${email}` ? <Check size={12} /> : <Copy size={12} />}
-                                </button>
-                              </div>
-                            ))}
+                            {emails.slice(0, 2).map((email, idx) => {
+                              const isPrimary = idx === 0;
+                              return (
+                                <div key={email} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <Mail size={13} color="#0284c7" style={{ flexShrink: 0 }} />
+                                  <span style={{ color: 'var(--text-main)', fontWeight: isPrimary ? 600 : 500, fontSize: '12.5px' }}>
+                                    {email}
+                                  </span>
+                                  {isPrimary && (
+                                    <span
+                                      style={{
+                                        fontSize: '10px',
+                                        fontWeight: 700,
+                                        color: '#059669',
+                                        background: '#ecfdf5',
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        border: '1px solid #a7f3d0',
+                                      }}
+                                    >
+                                      Primary
+                                    </span>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleCopy(email, `${r.id}_${email}`)}
+                                    title="Copy email"
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      padding: '2px',
+                                      color: copiedId === `${r.id}_${email}` ? '#10b981' : '#94a3b8',
+                                    }}
+                                  >
+                                    {copiedId === `${r.id}_${email}` ? <Check size={12} /> : <Copy size={12} />}
+                                  </button>
+                                </div>
+                              );
+                            })}
                             {emails.length > 2 && (
                               <button
                                 type="button"
@@ -685,39 +772,56 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </p>
                               ) : (
                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                  {emails.map((email) => (
-                                    <div
-                                      key={email}
-                                      style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '6px',
-                                        padding: '4px 10px',
-                                        borderRadius: '6px',
-                                        background: '#fef3c7',
-                                        border: '1px solid #fde68a',
-                                        fontSize: '12px',
-                                        color: '#92400e',
-                                        fontWeight: 600,
-                                      }}
-                                    >
-                                      <span>{email}</span>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleCopy(email, `${r.id}_em_${email}`)}
-                                        title="Copy email"
+                                  {emails.map((email, idx) => {
+                                    const isPrimary = idx === 0;
+                                    return (
+                                      <div
+                                        key={email}
                                         style={{
-                                          background: 'none',
-                                          border: 'none',
-                                          cursor: 'pointer',
-                                          padding: 0,
-                                          color: copiedId === `${r.id}_em_${email}` ? '#10b981' : '#b45309',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '6px',
+                                          padding: '4px 10px',
+                                          borderRadius: '6px',
+                                          background: isPrimary ? '#ecfdf5' : '#fef3c7',
+                                          border: `1px solid ${isPrimary ? '#a7f3d0' : '#fde68a'}`,
+                                          fontSize: '12px',
+                                          color: isPrimary ? '#065f46' : '#92400e',
+                                          fontWeight: 600,
                                         }}
                                       >
-                                        {copiedId === `${r.id}_em_${email}` ? <Check size={12} /> : <Copy size={12} />}
-                                      </button>
-                                    </div>
-                                  ))}
+                                        <span>{email}</span>
+                                        {isPrimary && (
+                                          <span
+                                            style={{
+                                              fontSize: '9.5px',
+                                              background: '#059669',
+                                              color: '#fff',
+                                              padding: '1px 5px',
+                                              borderRadius: '3px',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            Primary
+                                          </span>
+                                        )}
+                                        <button
+                                          type="button"
+                                          onClick={() => handleCopy(email, `${r.id}_em_${email}`)}
+                                          title="Copy email"
+                                          style={{
+                                            background: 'none',
+                                            border: 'none',
+                                            cursor: 'pointer',
+                                            padding: 0,
+                                            color: copiedId === `${r.id}_em_${email}` ? '#10b981' : (isPrimary ? '#059669' : '#b45309'),
+                                          }}
+                                        >
+                                          {copiedId === `${r.id}_em_${email}` ? <Check size={12} /> : <Copy size={12} />}
+                                        </button>
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
