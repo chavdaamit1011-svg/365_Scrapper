@@ -1,6 +1,6 @@
 export type CrawlerExecutionState = 'IDLE' | 'RUNNING' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
 
-export type CrawlRecordStatus = 'RESOLVED' | 'ACTIVE' | 'PENDING' | 'ERROR';
+export type CrawlRecordStatus = 'RESOLVED' | 'ACTIVE' | 'PENDING' | 'ERROR' | 'OFFLINE' | 'UNREACHABLE' | 'DISCOVERING';
 
 export interface VerifiedEmailDetail {
   email: string;

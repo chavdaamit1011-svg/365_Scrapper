@@ -138,11 +138,18 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       }
       const rankedEmails = rankAndFilterEmails(rawEmailList, domainKey);
 
+      // Check if this record represents an offline, timed out, or inaccessible target
+      const isRecordOffline =
+        r.status === 'OFFLINE' ||
+        r.status === 'UNREACHABLE' ||
+        (r.pagesCrawled === 0 && (!r.emails || r.emails.length === 0)) ||
+        (Array.isArray(r.crawledPages) && r.crawledPages.some((p) => (p.statusCode && p.statusCode >= 500) || p.title?.includes('Unreachable')));
+
       // Collect crawled pages
       const rawPageList: CrawledPageDetail[] = [];
       if (Array.isArray(r.crawledPages) && r.crawledPages.length > 0) {
         rawPageList.push(...r.crawledPages);
-      } else if (r.sourceUrl) {
+      } else if (r.sourceUrl && !isRecordOffline) {
         rawPageList.push({
           url: r.sourceUrl,
           title: 'Root Scope Page',
@@ -157,18 +164,32 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           ...r,
           id: r.id || `dom_${domainKey}`,
           domain: domainKey,
+          status: isRecordOffline ? 'OFFLINE' : (r.status || 'RESOLVED'),
+          category: isRecordOffline ? 'Site Inaccessible / Offline' : (r.category || 'Corporate & Business Services'),
+          categoryIcon: isRecordOffline ? '⚠️' : (r.categoryIcon || '🌐'),
+          summary: isRecordOffline
+            ? (r.summary || 'Website server took too long to respond (ERR_CONNECTION_TIMED_OUT). No live HTML pages could be reached.')
+            : (r.summary || ''),
           subdomains: Array.from(new Set(subList)),
           subdomainCount: subList.length,
           email: rankedEmails[0] || '',
           emails: rankedEmails,
           emailCount: rankedEmails.length,
           crawledPages: rawPageList,
-          pagesCrawled: Math.max(r.pagesCrawled || 1, rawPageList.length || 1),
+          pagesCrawled: isRecordOffline ? 0 : Math.max(r.pagesCrawled || 1, rawPageList.length || 1),
         });
       } else {
         // Merge subdomains, emails, and crawled pages
         const mergedSubs = Array.from(new Set([...(existing.subdomains || []), ...subList]));
         const mergedEmails = rankAndFilterEmails([...(existing.emails || []), ...rawEmailList], domainKey);
+
+        if (isRecordOffline) {
+          existing.status = 'OFFLINE';
+          existing.category = 'Site Inaccessible / Offline';
+          existing.categoryIcon = '⚠️';
+          if (r.summary) existing.summary = r.summary;
+          existing.pagesCrawled = 0;
+        }
 
         if (rawPageList.length > 0) {
           const seenUrls = new Set((existing.crawledPages || []).map((p) => p.url));
@@ -180,7 +201,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             }
           }
           existing.crawledPages = mergedPages;
-          existing.pagesCrawled = Math.max(existing.pagesCrawled || 1, mergedPages.length);
+          if (!isRecordOffline) {
+            existing.pagesCrawled = Math.max(existing.pagesCrawled || 1, mergedPages.length);
+          }
         }
 
         existing.subdomains = mergedSubs;
@@ -509,17 +532,22 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 const subdomains = r.subdomains || [];
                 const emails = r.emails || [];
                 const crawledPages = r.crawledPages || [];
+                const isOffline =
+                  r.status === 'OFFLINE' ||
+                  r.status === 'UNREACHABLE' ||
+                  r.pagesCrawled === 0 ||
+                  (Array.isArray(crawledPages) && crawledPages.some((p) => (p.statusCode && p.statusCode >= 500) || p.title?.includes('Unreachable')));
 
                 return (
                   <React.Fragment key={r.id || idx}>
                     <tr
                       style={{
                         borderBottom: isExpanded ? 'none' : idx < filteredGroups.length - 1 ? '1px solid #f1f5f9' : 'none',
-                        background: isExpanded ? '#f8fafc' : 'transparent',
+                        background: isExpanded ? (isOffline ? '#fff8f8' : '#f8fafc') : 'transparent',
                         transition: 'background 0.15s ease',
                       }}
                       onMouseEnter={(e) => {
-                        if (!isExpanded) e.currentTarget.style.background = '#fcfdfe';
+                        if (!isExpanded) e.currentTarget.style.background = isOffline ? '#fff5f5' : '#fcfdfe';
                       }}
                       onMouseLeave={(e) => {
                         if (!isExpanded) e.currentTarget.style.background = 'transparent';
@@ -528,13 +556,31 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       {/* Column 1: Target Domain & Content Intelligence */}
                       <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
-                          <Globe size={16} color="#0284c7" style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <Globe size={16} color={isOffline ? '#dc2626' : '#0284c7'} style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                               <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13.5px' }}>
                                 {r.domain}
                               </span>
-                              {r.isEcommerce && (
+                              {isOffline ? (
+                                <span
+                                  style={{
+                                    fontSize: '10.5px',
+                                    fontWeight: 700,
+                                    color: '#b91c1c',
+                                    background: '#fee2e2',
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
+                                    border: '1px solid #fecaca',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                  }}
+                                  title="Website is offline or server timed out"
+                                >
+                                  ⚠️ Offline / Band He
+                                </span>
+                              ) : r.isEcommerce ? (
                                 <span
                                   style={{
                                     fontSize: '10.5px',
@@ -552,36 +598,62 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 >
                                   🛒 E-Commerce
                                 </span>
-                              )}
+                              ) : null}
                             </div>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                              <span style={{ color: '#0369a1', fontWeight: 600 }}>
-                                {r.categoryIcon || '🌐'} {r.category || 'Corporate'}
-                              </span>
-                              <span>•</span>
-                              <button
-                                type="button"
-                                onClick={() => toggleExpand(r.id)}
-                                style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  padding: 0,
-                                  cursor: 'pointer',
-                                  color: isExpanded ? '#0284c7' : 'var(--text-muted)',
-                                  fontWeight: 600,
-                                  textDecoration: 'underline',
-                                  textUnderlineOffset: '2px',
-                                  fontSize: '11px',
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: '3px',
-                                }}
-                                title="Click to view all crawled pages"
-                              >
-                                <FileText size={11} color={isExpanded ? '#0284c7' : '#64748b'} />
-                                <span>{crawledPages.length > 0 ? `${crawledPages.length} pages` : (r.pagesCrawled ? `${r.pagesCrawled} pages` : '1 page')}</span>
-                              </button>
-                            </div>
+                            {isOffline ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginTop: '3px' }}>
+                                <span style={{ color: '#dc2626', fontWeight: 600 }}>
+                                  ⚠️ Site Inaccessible (Server Timed Out)
+                                </span>
+                                <span>•</span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpand(r.id)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    cursor: 'pointer',
+                                    color: '#b91c1c',
+                                    fontWeight: 600,
+                                    textDecoration: 'underline',
+                                    fontSize: '11px',
+                                  }}
+                                  title="Click to view offline error diagnostics"
+                                >
+                                  0 pages crawled
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                                <span style={{ color: '#0369a1', fontWeight: 600 }}>
+                                  {r.categoryIcon || '🌐'} {r.category || 'Corporate'}
+                                </span>
+                                <span>•</span>
+                                <button
+                                  type="button"
+                                  onClick={() => toggleExpand(r.id)}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    padding: 0,
+                                    cursor: 'pointer',
+                                    color: isExpanded ? '#0284c7' : 'var(--text-muted)',
+                                    fontWeight: 600,
+                                    textDecoration: 'underline',
+                                    textUnderlineOffset: '2px',
+                                    fontSize: '11px',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                  }}
+                                  title="Click to view all crawled pages"
+                                >
+                                  <FileText size={11} color={isExpanded ? '#0284c7' : '#64748b'} />
+                                  <span>{crawledPages.length > 0 ? `${crawledPages.length} pages` : (r.pagesCrawled ? `${r.pagesCrawled} pages` : '1 page')}</span>
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -760,8 +832,16 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
 
                       {/* Column 5: Status */}
                       <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                        <Badge variant={r.status === 'RESOLVED' ? 'success' : 'primary'}>
-                          {r.status}
+                        <Badge
+                          variant={
+                            isOffline || r.status === 'OFFLINE' || r.status === 'UNREACHABLE'
+                              ? 'danger'
+                              : r.status === 'RESOLVED'
+                              ? 'success'
+                              : 'primary'
+                          }
+                        >
+                          {isOffline || r.status === 'OFFLINE' ? 'OFFLINE' : r.status}
                         </Badge>
                       </td>
 
@@ -838,150 +918,211 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
                                 }}
                               >
-                            {/* Website Intelligence & Content Classification */}
-                            <div
-                              style={{
-                                background: '#f8fafc',
-                                border: '1px solid #e2e8f0',
-                                borderRadius: '8px',
-                                padding: '12px 14px',
-                                display: 'flex',
-                                flexDirection: 'column',
-                                gap: '8px',
-                              }}
-                            >
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                  <span style={{ fontSize: '18px' }}>{r.categoryIcon || '🌐'}</span>
-                                  <div>
-                                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                      {r.category || 'Corporate & Business Services'}
+                            {/* Website Intelligence & Content Classification OR Offline Alert */}
+                            {isOffline ? (
+                              <div
+                                style={{
+                                  background: '#fff1f2',
+                                  border: '1px solid #fecdd3',
+                                  borderRadius: '8px',
+                                  padding: '14px 16px',
+                                  display: 'flex',
+                                  alignItems: 'flex-start',
+                                  gap: '12px',
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    width: '38px',
+                                    height: '38px',
+                                    borderRadius: '8px',
+                                    background: '#ffe4e6',
+                                    color: '#e11d48',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    flexShrink: 0,
+                                    fontSize: '20px',
+                                    fontWeight: 'bold',
+                                    border: '1px solid #fecdd3',
+                                  }}
+                                >
+                                  ⚠️
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
+                                    <span style={{ fontSize: '14px', fontWeight: 700, color: '#9f1239' }}>
+                                      Website Band He / Site Can't Be Reached
                                     </span>
-                                    {r.isEcommerce && (
+                                    <span
+                                      style={{
+                                        fontSize: '10px',
+                                        fontWeight: 700,
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        background: '#e11d48',
+                                        color: '#ffffff',
+                                        letterSpacing: '0.5px',
+                                      }}
+                                    >
+                                      OFFLINE (TIMED OUT)
+                                    </span>
+                                  </div>
+                                  <p style={{ fontSize: '12.5px', color: '#be123c', margin: '0 0 6px 0', lineHeight: 1.45 }}>
+                                    {r.summary || 'Target website server respond nahi kar raha (ERR_CONNECTION_TIMED_OUT). Server band ya unreachable hone ki wajah se koi bhi live page content, email ya phone number scrap nahi ho paya.'}
+                                  </p>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11px', color: '#881337', flexWrap: 'wrap' }}>
+                                    <span>• Server Status: <strong>Connection Timed Out / Server Offline</strong></span>
+                                    <span>• Target Scope: <code style={{ background: '#ffe4e6', padding: '1px 5px', borderRadius: '3px' }}>{r.domain}</code></span>
+                                    <span>• Live Pages Crawled: <strong>0 (Inaccessible)</strong></span>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div
+                                style={{
+                                  background: '#f8fafc',
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: '8px',
+                                  padding: '12px 14px',
+                                  display: 'flex',
+                                  flexDirection: 'column',
+                                  gap: '8px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '18px' }}>{r.categoryIcon || '🌐'}</span>
+                                    <div>
+                                      <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                        {r.category || 'Corporate & Business Services'}
+                                      </span>
+                                      {r.isEcommerce && (
+                                        <span
+                                          style={{
+                                            marginLeft: '8px',
+                                            fontSize: '11px',
+                                            fontWeight: 700,
+                                            color: '#065f46',
+                                            background: '#d1fae5',
+                                            padding: '2px 7px',
+                                            borderRadius: '4px',
+                                            border: '1px solid #a7f3d0',
+                                          }}
+                                        >
+                                          🛒 E-Commerce Store
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+
+                                  {Array.isArray(r.technologies) && r.technologies.length > 0 && (
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                                      <Cpu size={12} color="#64748b" />
+                                      <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Tech:</span>
+                                      {r.technologies.map((t) => (
+                                        <span
+                                          key={t}
+                                          style={{
+                                            fontSize: '10.5px',
+                                            fontWeight: 600,
+                                            color: '#475569',
+                                            background: '#f1f5f9',
+                                            padding: '1px 6px',
+                                            borderRadius: '4px',
+                                            border: '1px solid #e2e8f0',
+                                          }}
+                                        >
+                                          {t}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {r.summary && (
+                                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4, fontStyle: 'italic' }}>
+                                    "{r.summary}"
+                                  </p>
+                                )}
+
+                                {Array.isArray(r.ecommerceSignals) && r.ecommerceSignals.length > 0 && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
+                                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#047857' }}>Store Signals:</span>
+                                    {r.ecommerceSignals.map((sig) => (
                                       <span
+                                        key={sig}
                                         style={{
-                                          marginLeft: '8px',
-                                          fontSize: '11px',
-                                          fontWeight: 700,
+                                          fontSize: '10.5px',
+                                          fontWeight: 600,
                                           color: '#065f46',
-                                          background: '#d1fae5',
-                                          padding: '2px 7px',
+                                          background: '#ecfdf5',
+                                          padding: '1px 6px',
                                           borderRadius: '4px',
                                           border: '1px solid #a7f3d0',
                                         }}
                                       >
-                                        🛒 E-Commerce Store
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-
-                                {Array.isArray(r.technologies) && r.technologies.length > 0 && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
-                                    <Cpu size={12} color="#64748b" />
-                                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Tech:</span>
-                                    {r.technologies.map((t) => (
-                                      <span
-                                        key={t}
-                                        style={{
-                                          fontSize: '10.5px',
-                                          fontWeight: 600,
-                                          color: '#475569',
-                                          background: '#f1f5f9',
-                                          padding: '1px 6px',
-                                          borderRadius: '4px',
-                                          border: '1px solid #e2e8f0',
-                                        }}
-                                      >
-                                        {t}
+                                        ✓ {sig}
                                       </span>
                                     ))}
                                   </div>
                                 )}
+
+                                {Array.isArray(r.phones) && r.phones.length > 0 && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
+                                    <Phone size={12} color="#0284c7" />
+                                    <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-main)' }}>Contact Phone:</span>
+                                    {r.phones.map((phone, pIdx) => {
+                                      const isPrimaryPhone = pIdx === 0;
+                                      return (
+                                        <a
+                                          key={phone}
+                                          href={`tel:${phone.replace(/\s+/g, '')}`}
+                                          style={{
+                                            fontSize: '11px',
+                                            fontWeight: 600,
+                                            color: isPrimaryPhone ? '#065f46' : '#0369a1',
+                                            textDecoration: 'none',
+                                            background: isPrimaryPhone ? '#ecfdf5' : '#e0f2fe',
+                                            border: `1px solid ${isPrimaryPhone ? '#a7f3d0' : '#bae6fd'}`,
+                                            padding: '2px 8px',
+                                            borderRadius: '4px',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '4px',
+                                          }}
+                                          title={isPrimaryPhone ? 'Primary Contact Phone' : 'Alternate Contact Phone'}
+                                        >
+                                          <span>{phone}</span>
+                                          {isPrimaryPhone && (
+                                            <span
+                                              style={{
+                                                fontSize: '9.5px',
+                                                background: '#059669',
+                                                color: '#fff',
+                                                padding: '1px 5px',
+                                                borderRadius: '3px',
+                                                fontWeight: 700,
+                                              }}
+                                            >
+                                              Primary
+                                            </span>
+                                          )}
+                                        </a>
+                                      );
+                                    })}
+                                  </div>
+                                )}
                               </div>
-
-                              {r.summary && (
-                                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4, fontStyle: 'italic' }}>
-                                  "{r.summary}"
-                                </p>
-                              )}
-
-                              {Array.isArray(r.ecommerceSignals) && r.ecommerceSignals.length > 0 && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
-                                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#047857' }}>Store Signals:</span>
-                                  {r.ecommerceSignals.map((sig) => (
-                                    <span
-                                      key={sig}
-                                      style={{
-                                        fontSize: '10.5px',
-                                        fontWeight: 600,
-                                        color: '#065f46',
-                                        background: '#ecfdf5',
-                                        padding: '1px 6px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #a7f3d0',
-                                      }}
-                                    >
-                                      ✓ {sig}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-
-                              {Array.isArray(r.phones) && r.phones.length > 0 && (
-                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
-                                  <Phone size={12} color="#0284c7" />
-                                  <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-main)' }}>Contact Phone:</span>
-                                  {r.phones.map((phone, pIdx) => {
-                                    const isPrimaryPhone = pIdx === 0;
-                                    return (
-                                      <a
-                                        key={phone}
-                                        href={`tel:${phone.replace(/\s+/g, '')}`}
-                                        style={{
-                                          fontSize: '11px',
-                                          fontWeight: 600,
-                                          color: isPrimaryPhone ? '#065f46' : '#0369a1',
-                                          textDecoration: 'none',
-                                          background: isPrimaryPhone ? '#ecfdf5' : '#e0f2fe',
-                                          border: `1px solid ${isPrimaryPhone ? '#a7f3d0' : '#bae6fd'}`,
-                                          padding: '2px 8px',
-                                          borderRadius: '4px',
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '4px',
-                                        }}
-                                        title={isPrimaryPhone ? 'Primary Contact Phone' : 'Alternate Contact Phone'}
-                                      >
-                                        <span>{phone}</span>
-                                        {isPrimaryPhone && (
-                                          <span
-                                            style={{
-                                              fontSize: '9.5px',
-                                              background: '#059669',
-                                              color: '#fff',
-                                              padding: '1px 5px',
-                                              borderRadius: '3px',
-                                              fontWeight: 700,
-                                            }}
-                                          >
-                                            Primary
-                                          </span>
-                                        )}
-                                      </a>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
+                            )}
 
                             {/* Crawled Pages Section */}
-                            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px' }}>
+                            <div style={{ background: isOffline ? '#fff8f8' : '#f8fafc', border: `1px solid ${isOffline ? '#fecaca' : '#e2e8f0'}`, borderRadius: '8px', padding: '12px 14px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '6px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                  <FileText size={14} color="#0284c7" />
-                                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                    Crawled Pages ({crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1)})
+                                  <FileText size={14} color={isOffline ? '#dc2626' : '#0284c7'} />
+                                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: isOffline ? '#991b1b' : 'var(--text-main)' }}>
+                                    Crawled Pages ({isOffline ? 0 : (crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1))})
                                   </span>
                                   <span
                                     style={{
@@ -989,44 +1130,74 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                       fontWeight: 700,
                                       padding: '1px 6px',
                                       borderRadius: '4px',
-                                      background: '#e0f2fe',
-                                      color: '#0369a1',
-                                      border: '1px solid #bae6fd',
+                                      background: isOffline ? '#fee2e2' : '#e0f2fe',
+                                      color: isOffline ? '#dc2626' : '#0369a1',
+                                      border: `1px solid ${isOffline ? '#fecaca' : '#bae6fd'}`,
                                     }}
                                   >
-                                    Crawl Scope History
+                                    {isOffline ? 'Server Inaccessible' : 'Crawl Scope History'}
                                   </span>
                                 </div>
-                                <span style={{ fontSize: '11px', color: '#64748b' }}>
-                                  {crawledPages.length > 1
-                                    ? `Direct internal paths, contact routes & navigation pages analyzed`
-                                    : `Target root landing page analyzed`}
+                                <span style={{ fontSize: '11px', color: isOffline ? '#b91c1c' : '#64748b' }}>
+                                  {isOffline
+                                    ? 'Host server timed out. 0 live pages could be fetched'
+                                    : (crawledPages.length > 1
+                                      ? 'Direct internal paths, contact routes & navigation pages analyzed'
+                                      : 'Target root landing page analyzed')}
                                 </span>
                               </div>
 
-                              {crawledPages.length === 0 ? (
-                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 10px', borderRadius: '6px', background: '#ffffff', border: '1px solid #e2e8f0', fontSize: '12px' }}>
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                    <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'monospace', padding: '1px 5px', borderRadius: '3px', background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
-                                      200 OK
+                              {crawledPages.length === 0 || isOffline ? (
+                                isOffline ? (
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', padding: '8px 12px', borderRadius: '6px', background: '#ffffff', border: '1px solid #fecdd3', fontSize: '12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                      <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'monospace', padding: '1px 6px', borderRadius: '4px', background: '#dc2626', color: '#ffffff' }}>
+                                        ERR_TIMEOUT
+                                      </span>
+                                      <span style={{ fontSize: '10px', fontWeight: 600, color: '#991b1b', background: '#ffe4e6', padding: '1px 5px', borderRadius: '3px' }}>
+                                        depth 0
+                                      </span>
+                                      <a
+                                        href={r.sourceUrl || `https://${r.domain}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ color: '#be123c', fontWeight: 600, fontSize: '12px', textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                      >
+                                        <span>{r.sourceUrl || `https://${r.domain}`}</span>
+                                        <ExternalLink size={10} />
+                                      </a>
+                                      <span style={{ fontSize: '11.5px', color: '#9f1239', fontStyle: 'italic' }}>
+                                        — Website Band He / Server Timed Out (0 pages accessible)
+                                      </span>
+                                    </div>
+                                    <span style={{ fontSize: '11px', color: '#e11d48', fontWeight: 700 }}>
+                                      Host Unreachable
                                     </span>
-                                    <span style={{ fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '1px 5px', borderRadius: '3px' }}>
-                                      depth 0
-                                    </span>
-                                    <a
-                                      href={r.sourceUrl || `https://${r.domain}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      style={{ color: '#0369a1', fontWeight: 600, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
-                                    >
-                                      <span>{r.sourceUrl || `https://${r.domain}`}</span>
-                                      <ExternalLink size={10} />
-                                    </a>
                                   </div>
-                                  <span style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
-                                    Target Root Scope
-                                  </span>
-                                </div>
+                                ) : (
+                                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 10px', borderRadius: '6px', background: '#ffffff', border: '1px solid #e2e8f0', fontSize: '12px' }}>
+                                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                      <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'monospace', padding: '1px 5px', borderRadius: '3px', background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                                        200 OK
+                                      </span>
+                                      <span style={{ fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '1px 5px', borderRadius: '3px' }}>
+                                        depth 0
+                                      </span>
+                                      <a
+                                        href={r.sourceUrl || `https://${r.domain}`}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        style={{ color: '#0369a1', fontWeight: 600, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                      >
+                                        <span>{r.sourceUrl || `https://${r.domain}`}</span>
+                                        <ExternalLink size={10} />
+                                      </a>
+                                    </div>
+                                    <span style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
+                                      Target Root Scope
+                                    </span>
+                                  </div>
+                                )
                               ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                   {crawledPages.map((page, pIdx) => {
@@ -1034,6 +1205,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     const pTitle = typeof page === 'object' ? page.title : '';
                                     const pStatus = typeof page === 'object' ? (page.statusCode || 200) : 200;
                                     const pDepth = typeof page === 'object' ? (page.depth ?? 0) : 0;
+                                    const isPageFailed = pStatus >= 400 || pTitle?.includes('Unreachable') || isOffline;
 
                                     let pathDisplay = pUrl;
                                     try {
@@ -1053,8 +1225,8 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                           gap: '8px',
                                           padding: '7px 12px',
                                           borderRadius: '6px',
-                                          background: '#ffffff',
-                                          border: '1px solid #e2e8f0',
+                                          background: isPageFailed ? '#fff5f5' : '#ffffff',
+                                          border: `1px solid ${isPageFailed ? '#fecaca' : '#e2e8f0'}`,
                                           fontSize: '12px',
                                         }}
                                       >
@@ -1067,9 +1239,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                               fontFamily: 'monospace',
                                               padding: '1px 6px',
                                               borderRadius: '4px',
-                                              background: pStatus >= 400 ? '#fef2f2' : '#ecfdf5',
-                                              color: pStatus >= 400 ? '#b91c1c' : '#047857',
-                                              border: `1px solid ${pStatus >= 400 ? '#fecaca' : '#a7f3d0'}`,
+                                              background: isPageFailed ? '#fef2f2' : '#ecfdf5',
+                                              color: isPageFailed ? '#b91c1c' : '#047857',
+                                              border: `1px solid ${isPageFailed ? '#fecaca' : '#a7f3d0'}`,
                                             }}
                                           >
                                             {pStatus}
@@ -1078,8 +1250,8 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                             style={{
                                               fontSize: '10px',
                                               fontWeight: 600,
-                                              color: '#64748b',
-                                              background: '#f1f5f9',
+                                              color: isPageFailed ? '#b91c1c' : '#64748b',
+                                              background: isPageFailed ? '#fee2e2' : '#f1f5f9',
                                               padding: '1px 5px',
                                               borderRadius: '3px',
                                             }}
@@ -1092,7 +1264,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                             rel="noopener noreferrer"
                                             title={`Open ${pUrl} in new tab`}
                                             style={{
-                                              color: '#0369a1',
+                                              color: isPageFailed ? '#b91c1c' : '#0369a1',
                                               fontWeight: 600,
                                               fontSize: '12px',
                                               textDecoration: 'none',
@@ -1110,7 +1282,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                             <span
                                               style={{
                                                 fontSize: '11px',
-                                                color: '#64748b',
+                                                color: isPageFailed ? '#dc2626' : '#64748b',
                                                 fontStyle: 'italic',
                                                 maxWidth: '280px',
                                                 overflow: 'hidden',
@@ -1129,7 +1301,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                           <span
                                             style={{
                                               fontSize: '10.5px',
-                                              color: '#94a3b8',
+                                              color: isPageFailed ? '#ef4444' : '#94a3b8',
                                               fontFamily: 'monospace',
                                               maxWidth: '240px',
                                               overflow: 'hidden',

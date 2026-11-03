@@ -118,16 +118,11 @@ class WebCrawler:
                 timeout_ms=self.config.get("timeout", 12) * 1000,
             )
 
-        # Website Intelligence state (Category, E-Commerce, Tech, Phones, Summary)
-        self.site_intelligence = {
-            "category": "Corporate & Business Services",
-            "category_icon": "🌐",
-            "is_ecommerce": False,
-            "ecommerce_signals": [],
-            "technologies": [],
-            "phones": [],
-            "summary": "",
-        }
+        # Website Intelligence state (populated only when HTML is actually fetched)
+        self.site_intelligence: Dict[str, Any] = {}
+        self.last_network_error: Optional[str] = None
+        self.last_status_code: Optional[int] = None
+        self.has_fetched_content: bool = False
 
     def _init_robots_txt(self) -> None:
         """Fetches and parses robots.txt for the target domain."""
@@ -164,9 +159,21 @@ class WebCrawler:
                 logger.info(f"[PlaywrightCrawler] Rendering root landing page with headless browser: {url}")
                 rendered = self.playwright_engine.render_page(url)
                 if rendered and len(rendered) > 100:
+                    self.has_fetched_content = True
+                    self.last_status_code = 200
                     return rendered, 200, "text/html"
             except Exception as pw_err:
                 logger.warning(f"[PlaywrightCrawler] Root page render fallback to HTTP: {pw_err}")
+                pw_err_str = str(pw_err).lower()
+                if "net::err_connection_timed_out" in pw_err_str or "timeouterror" in pw_err_str or "timed out" in pw_err_str:
+                    self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
+                    self.last_status_code = 504
+                elif "net::err_name_not_resolved" in pw_err_str:
+                    self.last_network_error = "DNS Resolution Failed (Domain Inactive / Offline)"
+                    self.last_status_code = 502
+                elif "net::err_connection_refused" in pw_err_str:
+                    self.last_network_error = "Connection Refused (Server Down / Offline)"
+                    self.last_status_code = 503
 
         retries = self.config.get("retries", 2)
         timeout = self.config.get("timeout", 10)
@@ -207,18 +214,34 @@ class WebCrawler:
                     logger.info(f"[Playwright Fallback] Rendering dynamic / protected page ({url}, status {response.status_code})...")
                     rendered = self.playwright_engine.render_page(url)
                     if rendered and len(rendered) > 100:
+                        self.has_fetched_content = True
+                        self.last_status_code = 200
                         return rendered, 200, "text/html"
 
-                if response.status_code >= 400 and url != self.start_url:
-                    logger.debug(f"HTTP {response.status_code} received on {url}")
-                    return None
+                if response.status_code >= 400:
+                    self.last_status_code = response.status_code
+                    if response.status_code in (502, 503, 504):
+                        self.last_network_error = f"Server Error (HTTP {response.status_code})"
+                    elif response.status_code in (401, 403):
+                        self.last_network_error = f"Access Blocked (HTTP {response.status_code})"
+                    elif response.status_code == 404:
+                        self.last_network_error = f"Page Not Found (HTTP 404)"
+                    if url != self.start_url:
+                        logger.debug(f"HTTP {response.status_code} received on {url}")
+                        return None
 
+                self.has_fetched_content = True
+                self.last_status_code = response.status_code
                 return html, response.status_code, content_type
 
             except requests.exceptions.Timeout:
                 logger.warning(f"Timeout on {url} (Attempt {attempt}/{retries + 1})")
+                self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
+                self.last_status_code = 504
             except requests.exceptions.SSLError as ssl_err:
                 logger.warning(f"SSL Error on {url}: {ssl_err}. Setting session SSL verification to False...")
+                self.last_network_error = f"SSL Handshake Error ({ssl_err})"
+                self.last_status_code = 495
                 self.session.verify = False
                 try:
                     import urllib3
@@ -232,21 +255,53 @@ class WebCrawler:
                     ct = insecure_resp.headers.get("Content-Type", "").lower()
                     if ("text/html" in ct or "application/xhtml" in ct):
                         if insecure_resp.status_code < 400 or url == self.start_url:
+                            self.has_fetched_content = True
+                            self.last_status_code = insecure_resp.status_code
                             return insecure_resp.text, insecure_resp.status_code, ct
                 except Exception as inner_e:
                     logger.warning(f"Insecure SSL bypass failed on {url}: {inner_e}")
                 break
+            except requests.exceptions.ConnectionError as conn_err:
+                logger.warning(f"Connection error on {url}: {conn_err} (Attempt {attempt}/{retries + 1})")
+                err_text = str(conn_err).lower()
+                if "getaddrinfo failed" in err_text or "nameresolutionerror" in err_text:
+                    self.last_network_error = "DNS Resolution Failed (Domain Inactive / Offline)"
+                    self.last_status_code = 502
+                elif "connection refused" in err_text:
+                    self.last_network_error = "Connection Refused (Server Down / Offline)"
+                    self.last_status_code = 503
+                elif "timed out" in err_text or "timeout" in err_text:
+                    self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
+                    self.last_status_code = 504
+                else:
+                    self.last_network_error = "Network Connection Failed (Host Unreachable)"
+                    self.last_status_code = 503
             except requests.exceptions.RequestException as req_err:
                 logger.warning(f"Request error on {url}: {req_err} (Attempt {attempt}/{retries + 1})")
+                self.last_network_error = f"Request Error: {req_err}"
 
             time.sleep(1.0)
 
         # Fallback to Playwright if static requests failed completely
         if self.playwright_engine:
             logger.info(f"[Playwright Fallback] Static request failed for {url}. Attempting headless browser render...")
-            rendered = self.playwright_engine.render_page(url)
-            if rendered and len(rendered) > 100:
-                return rendered, 200, "text/html"
+            try:
+                rendered = self.playwright_engine.render_page(url)
+                if rendered and len(rendered) > 100:
+                    self.has_fetched_content = True
+                    self.last_status_code = 200
+                    return rendered, 200, "text/html"
+            except Exception as pw_err:
+                pw_err_str = str(pw_err).lower()
+                if "net::err_connection_timed_out" in pw_err_str or "timeouterror" in pw_err_str or "timed out" in pw_err_str:
+                    self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
+                    self.last_status_code = 504
+                elif "net::err_name_not_resolved" in pw_err_str:
+                    self.last_network_error = "DNS Resolution Failed (Domain Inactive / Offline)"
+                    self.last_status_code = 502
+                elif "net::err_connection_refused" in pw_err_str:
+                    self.last_network_error = "Connection Refused (Server Down / Offline)"
+                    self.last_status_code = 503
 
         return None
 
@@ -270,6 +325,13 @@ class WebCrawler:
             ranked_emails = [item["email"] for item in sorted_verified]
             sorted_subdomains = sorted(list(self.all_subdomains))
 
+            is_active_phase = status in ("ACTIVE", "DISCOVERING", "CRAWLING")
+            cat_default = "Analyzing Website Intelligence..." if is_active_phase else "Site Inaccessible / Offline"
+            icon_default = "🔍" if is_active_phase else "⚠️"
+            summary_default = "Discovering domain intelligence and verifying target scope..." if is_active_phase else (
+                f"Website is unreachable ({self.last_network_error or 'Connection timed out'}). No live pages could be accessed."
+            )
+
             domain_record = {
                 "id": f"domain_{self.root_domain}",
                 "domain": self.root_domain,
@@ -281,13 +343,13 @@ class WebCrawler:
                 "emails": ranked_emails,
                 "verifiedEmails": sorted_verified,
                 "emailCount": len(ranked_emails),
-                "category": self.site_intelligence.get("category", "Corporate & Business Services"),
-                "categoryIcon": self.site_intelligence.get("category_icon", "🌐"),
+                "category": self.site_intelligence.get("category", cat_default),
+                "categoryIcon": self.site_intelligence.get("category_icon", icon_default),
                 "isEcommerce": self.site_intelligence.get("is_ecommerce", False),
                 "ecommerceSignals": self.site_intelligence.get("ecommerce_signals", []),
                 "technologies": self.site_intelligence.get("technologies", []),
                 "phones": self.site_intelligence.get("phones", []),
-                "summary": self.site_intelligence.get("summary", ""),
+                "summary": self.site_intelligence.get("summary", summary_default),
                 "country": country_name,
                 "countryCode": country_code,
                 "countryFlag": country_flag,
@@ -670,6 +732,44 @@ class WebCrawler:
         # Sync with MongoDB / Portal (Domain Consolidated Structure)
         logger.info("Synchronizing domain consolidated data with MongoDB / Portal...")
 
+        # Check if site is completely offline / unreachable
+        is_site_offline = len(self.visited_records) == 0
+
+        final_status = "OFFLINE" if is_site_offline else "RESOLVED"
+        final_category = (
+            "Site Inaccessible / Offline"
+            if is_site_offline
+            else self.site_intelligence.get("category", "Corporate & Business Services")
+        )
+        final_category_icon = "⚠️" if is_site_offline else self.site_intelligence.get("category_icon", "🌐")
+        final_summary = (
+            f"Target website is down or unreachable ({self.last_network_error or 'Connection timed out / ERR_CONNECTION_TIMED_OUT'}). No live HTML content could be loaded."
+            if is_site_offline
+            else self.site_intelligence.get("summary", "")
+        )
+
+        crawled_pages_list = [
+            {
+                "url": r["url"],
+                "title": r.get("title", ""),
+                "statusCode": r.get("status_code", 200),
+                "depth": r.get("depth", 0),
+                "timestamp": r.get("timestamp"),
+            }
+            for r in self.visited_records
+        ]
+
+        if is_site_offline:
+            crawled_pages_list = [
+                {
+                    "url": self.start_url,
+                    "title": f"Unreachable: {self.last_network_error or 'Connection Timed Out'}",
+                    "statusCode": self.last_status_code or 504,
+                    "depth": 0,
+                    "timestamp": datetime.datetime.now().isoformat(),
+                }
+            ]
+
         domain_record = {
             "id": f"domain_{self.root_domain}",
             "domain": self.root_domain,
@@ -681,29 +781,20 @@ class WebCrawler:
             "emails": ranked_emails,
             "verifiedEmails": sorted_verified,
             "emailCount": len(ranked_emails),
-            "category": self.site_intelligence.get("category", "Corporate & Business Services"),
-            "categoryIcon": self.site_intelligence.get("category_icon", "🌐"),
-            "isEcommerce": self.site_intelligence.get("is_ecommerce", False),
-            "ecommerceSignals": self.site_intelligence.get("ecommerce_signals", []),
-            "technologies": self.site_intelligence.get("technologies", []),
-            "phones": self.site_intelligence.get("phones", []),
-            "summary": self.site_intelligence.get("summary", ""),
+            "category": final_category,
+            "categoryIcon": final_category_icon,
+            "isEcommerce": self.site_intelligence.get("is_ecommerce", False) if not is_site_offline else False,
+            "ecommerceSignals": self.site_intelligence.get("ecommerce_signals", []) if not is_site_offline else [],
+            "technologies": self.site_intelligence.get("technologies", []) if not is_site_offline else [],
+            "phones": self.site_intelligence.get("phones", []) if not is_site_offline else [],
+            "summary": final_summary,
             "country": country_name,
             "countryCode": country_code,
             "countryFlag": country_flag,
-            "status": "RESOLVED",
+            "status": final_status,
             "sourceUrl": self.start_url,
             "pagesCrawled": len(self.visited_records),
-            "crawledPages": [
-                {
-                    "url": r["url"],
-                    "title": r.get("title", ""),
-                    "statusCode": r.get("status_code", 200),
-                    "depth": r.get("depth", 0),
-                    "timestamp": r.get("timestamp"),
-                }
-                for r in self.visited_records
-            ],
+            "crawledPages": crawled_pages_list,
             "discoveredAt": datetime.datetime.now().isoformat(),
         }
 
