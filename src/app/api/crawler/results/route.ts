@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
+import fs from 'fs';
+import path from 'path';
 import { connectMongo, MongoScrapedResultModel } from '@/lib/mongodb';
+import { redisQueue } from '@/lib/redisQueue';
 
 export const dynamic = 'force-dynamic';
 
@@ -71,11 +74,81 @@ export async function DELETE() {
       );
     }
 
-    const deleteRes = await MongoScrapedResultModel.deleteMany({});
+    // 1. Wipe all collections in MongoDB (Component 5 & Phase 2 tables)
+    const db = mongoose.connection.db;
+    let deletedCount = 0;
+    if (db) {
+      const collections = [
+        'scraped_results',
+        'raw_crawl_data',
+        'master_domains',
+        'master_subdomains',
+        'master_emails',
+        'data_changes',
+      ];
+      for (const collName of collections) {
+        try {
+          const res = await db.collection(collName).deleteMany({});
+          if (collName === 'scraped_results') {
+            deletedCount = res.deletedCount || 0;
+          }
+        } catch (e) {
+          console.warn(`[API] Failed to clear collection ${collName}:`, e);
+        }
+      }
+    }
+
+    // 2. Clear Redis Queue & Fallback Queue file (Component 2)
+    try {
+      await redisQueue.clearQueue();
+    } catch (e) {
+      console.warn('[API] Failed to clear Redis queue:', e);
+    }
+
+    // 3. Clear SQLite relational master database (Phase 2 Master)
+    try {
+      const sqlitePath = path.join(process.cwd(), 'crawler_engine', 'storage', 'master_relational.db');
+      if (fs.existsSync(sqlitePath)) {
+        fs.unlinkSync(sqlitePath);
+      }
+    } catch (e) {
+      console.warn('[API] Failed to unlink sqlite db:', e);
+    }
+
+    // 4. Clear local crawler output files (JSON and CSV in output/ directories)
+    try {
+      const outputDir = path.join(process.cwd(), 'crawler_engine', 'output');
+      if (fs.existsSync(outputDir)) {
+        for (const sub of ['urls', 'emails', 'subdomains', 'external_links', 'metadata']) {
+          const subPath = path.join(outputDir, sub);
+          if (fs.existsSync(subPath)) {
+            for (const file of fs.readdirSync(subPath)) {
+              if (file.endsWith('.json') || file.endsWith('.csv')) {
+                try {
+                  fs.unlinkSync(path.join(subPath, file));
+                } catch {}
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[API] Failed to clean crawler output:', e);
+    }
+
+    // 5. Clean local disk cache files
+    for (const fName of ['.screpper-scraped.json', '.screpper-redis-queue.json']) {
+      try {
+        const p = path.join(process.cwd(), fName);
+        if (fs.existsSync(p)) {
+          fs.unlinkSync(p);
+        }
+      } catch {}
+    }
 
     return NextResponse.json({
       success: true,
-      message: `Deleted ${deleteRes.deletedCount || 0} records from MongoDB collection 'scraped_results'.`,
+      message: `Complete purge successful: Deleted ${deletedCount} records and wiped all caches, queues, and history files.`,
     });
   } catch (error: any) {
     console.error('[API/Crawler Results] Error clearing MongoDB:', error);

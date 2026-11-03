@@ -299,20 +299,26 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   };
 
   const handleClearAll = async () => {
-    if (!confirm('Are you sure you want to clear all scraped database records?')) {
+    if (!confirm('Are you sure you want to clear all scraped database records, caches, and queues?')) {
       return;
     }
     try {
       setIsClearing(true);
       setExpandedDomainId(null);
+      // Immediately purge all browser local storage and session caches
+      try {
+        localStorage.removeItem('the_scrapper_scraped_results');
+        localStorage.removeItem('the_scrapper_targets_queue');
+        sessionStorage.clear();
+      } catch (e) {}
+
       const res = await fetch('/api/crawler/results', { method: 'DELETE' });
       const data = await res.json();
       if (data.success) {
         if (onClearResults) {
           onClearResults();
-        } else {
-          window.location.reload();
         }
+        window.location.reload();
       } else {
         alert(data.message || 'Could not clear database records.');
       }

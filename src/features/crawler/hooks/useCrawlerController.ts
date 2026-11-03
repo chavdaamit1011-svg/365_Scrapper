@@ -41,29 +41,41 @@ export function useCrawlerController(
   // Fetch fresh results from MongoDB API
   const fetchMongoResults = useCallback(async () => {
     try {
-      const res = await fetch('/api/crawler/results');
+      const res = await fetch('/api/crawler/results', { cache: 'no-store' });
       const json = await res.json();
-      if (json.success && Array.isArray(json.data) && json.data.length > 0) {
-        setScrapedResults(json.data);
-        return json.data;
+      if (json.success && Array.isArray(json.data)) {
+        if (json.data.length > 0) {
+          setScrapedResults(json.data);
+          try {
+            localStorage.setItem(STORAGE_KEY_RESULTS, JSON.stringify(json.data));
+          } catch (e) {}
+          return json.data;
+        } else {
+          // DATABASE HAS BEEN CLEARED! Explicitly wipe in-memory and browser localStorage!
+          setScrapedResults([]);
+          try {
+            localStorage.removeItem(STORAGE_KEY_RESULTS);
+          } catch (e) {}
+          return [];
+        }
       }
     } catch (err) {
       console.warn('Could not fetch MongoDB scraped results:', err);
+      // ONLY on real network/API failure, fallback to localStorage
+      try {
+        const stored = localStorage.getItem(STORAGE_KEY_RESULTS);
+        if (stored) {
+          const parsed = JSON.parse(stored);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setScrapedResults(parsed);
+            return parsed;
+          }
+        }
+      } catch (e) {
+        console.warn('Could not read cached scraped results:', e);
+      }
     }
 
-    // Local storage fallback
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY_RESULTS);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setScrapedResults(parsed);
-          return parsed;
-        }
-      }
-    } catch (e) {
-      console.warn('Could not read cached scraped results:', e);
-    }
     return [];
   }, []);
 
@@ -72,10 +84,14 @@ export function useCrawlerController(
     fetchMongoResults();
   }, [fetchMongoResults]);
 
-  // Save to localStorage whenever scrapedResults change
+  // Save to localStorage whenever scrapedResults change, or clear if empty
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY_RESULTS, JSON.stringify(scrapedResults));
+      if (scrapedResults.length > 0) {
+        localStorage.setItem(STORAGE_KEY_RESULTS, JSON.stringify(scrapedResults));
+      } else {
+        localStorage.removeItem(STORAGE_KEY_RESULTS);
+      }
     } catch (e) {
       console.warn('Could not cache scraped results:', e);
     }
@@ -352,6 +368,8 @@ export function useCrawlerController(
     setCurrentTargetName(null);
     try {
       localStorage.removeItem(STORAGE_KEY_RESULTS);
+      localStorage.removeItem('the_scrapper_targets_queue');
+      sessionStorage.clear();
       fetch('/api/crawler/results', { method: 'DELETE' }).catch(() => {});
     } catch (e) {}
   }, [status]);

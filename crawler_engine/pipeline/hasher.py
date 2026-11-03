@@ -47,3 +47,4 @@ def generate_payload_fingerprint(payload: Dict[str, Any]) -> str:
     }
     encoded = json.dumps(canonical_dict, sort_keys=True)
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+

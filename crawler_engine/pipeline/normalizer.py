@@ -194,3 +194,4 @@ def normalize_crawl_payload(raw_payload: Dict[str, Any]) -> Dict[str, Any]:
         "pagesCrawled": len(norm_pages),
         "sourceUrl": normalize_url(raw_payload.get("sourceUrl", "")),
     }
+

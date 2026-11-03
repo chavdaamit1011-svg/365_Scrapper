@@ -56,3 +56,4 @@ class BloomFilter:
             if not (self.bit_array[byte_idx] & (1 << bit_offset)):
                 return False
         return True
+

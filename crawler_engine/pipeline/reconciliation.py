@@ -481,3 +481,4 @@ class ReconciliationEngine:
                 LIMIT 50
             """, (domain_id,))
             return [dict(row) for row in cursor.fetchall()]
+
