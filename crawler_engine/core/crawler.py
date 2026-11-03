@@ -18,9 +18,10 @@ from crawler_engine.extractors.link_extractor import (
 )
 from crawler_engine.extractors.email_extractor import extract_emails_from_html, rank_emails_by_relevance
 from crawler_engine.extractors.metadata_extractor import extract_page_metadata
+from crawler_engine.extractors.site_classifier import classify_website_content
 from crawler_engine.storage.file_storage import LocalFileStorage
 from crawler_engine.storage.mongo_storage import MongoStorage
-from crawler_engine.core.playwright_engine import PlaywrightFallbackEngine
+from crawler_engine.core.playwright_engine import PlaywrightCrawlerEngine
 
 # Setup Logger
 logger = logging.getLogger("TheScrapper.Crawler")
@@ -100,13 +101,24 @@ class WebCrawler:
         if self.config.get("respect_robots_txt", True):
             self._init_robots_txt()
 
-        # Playwright fallback engine (initialized only if requested/needed)
-        self.playwright_engine: Optional[PlaywrightFallbackEngine] = None
-        if self.config.get("use_playwright_fallback", False):
-            self.playwright_engine = PlaywrightFallbackEngine(
+        # Playwright Crawler Engine (initialized if enabled)
+        self.playwright_engine: Optional[PlaywrightCrawlerEngine] = None
+        if self.config.get("use_playwright_fallback", True):
+            self.playwright_engine = PlaywrightCrawlerEngine(
                 headless=self.config.get("playwright_headless", True),
-                timeout_ms=self.config.get("timeout", 10) * 1000,
+                timeout_ms=self.config.get("timeout", 12) * 1000,
             )
+
+        # Website Intelligence state (Category, E-Commerce, Tech, Phones, Summary)
+        self.site_intelligence = {
+            "category": "Corporate & Business Services",
+            "category_icon": "🌐",
+            "is_ecommerce": False,
+            "ecommerce_signals": [],
+            "technologies": [],
+            "phones": [],
+            "summary": "",
+        }
 
     def _init_robots_txt(self) -> None:
         """Fetches and parses robots.txt for the target domain."""
@@ -132,10 +144,21 @@ class WebCrawler:
 
     def fetch_page_content(self, url: str) -> Optional[Tuple[str, int, str]]:
         """
-        Fetches HTML content with retries and timeout.
-        If content is empty or JS-rendered, attempts Playwright fallback.
+        Fetches HTML content with hybrid Playwright & requests crawler strategy.
+        - Root landing page: Renders via Playwright to ensure Next.js/React SPA hydrates.
+        - Sub-pages: Fast HTTP requests with automatic Playwright fallback on JS SPAs.
         Returns: (html_string, status_code, content_type) or None on failure.
         """
+        # For root landing page: attempt Playwright rendering first if enabled
+        if url == self.start_url and self.playwright_engine:
+            try:
+                logger.info(f"[PlaywrightCrawler] Rendering root landing page with headless browser: {url}")
+                rendered = self.playwright_engine.render_page(url)
+                if rendered and len(rendered) > 100:
+                    return rendered, 200, "text/html"
+            except Exception as pw_err:
+                logger.warning(f"[PlaywrightCrawler] Root page render fallback to HTTP: {pw_err}")
+
         retries = self.config.get("retries", 2)
         timeout = self.config.get("timeout", 10)
 
@@ -227,6 +250,13 @@ class WebCrawler:
                 "email": ranked_emails[0] if ranked_emails else "",
                 "emails": ranked_emails,
                 "emailCount": len(ranked_emails),
+                "category": self.site_intelligence.get("category", "Corporate & Business Services"),
+                "categoryIcon": self.site_intelligence.get("category_icon", "🌐"),
+                "isEcommerce": self.site_intelligence.get("is_ecommerce", False),
+                "ecommerceSignals": self.site_intelligence.get("ecommerce_signals", []),
+                "technologies": self.site_intelligence.get("technologies", []),
+                "phones": self.site_intelligence.get("phones", []),
+                "summary": self.site_intelligence.get("summary", ""),
                 "country": country_name,
                 "countryCode": country_code,
                 "countryFlag": country_flag,
@@ -327,6 +357,16 @@ class WebCrawler:
                 # 3. Extract Metadata
                 meta = extract_page_metadata(soup, current_url)
                 self.metadata_records.append(meta)
+
+                # 4. Classify Website Content, E-Commerce Type & Real Technologies
+                if current_url == self.start_url or not self.site_intelligence.get("summary"):
+                    intel = classify_website_content(soup, raw_html=html, url=current_url)
+                    self.site_intelligence = intel
+                    logger.info(f"  [Intelligence] Category: {intel['category_icon']} {intel['category']} (E-Commerce: {intel['is_ecommerce']})")
+                    if intel["technologies"]:
+                        logger.info(f"  [Tech Stack] Detected: {', '.join(intel['technologies'])}")
+                    if intel["phones"]:
+                        logger.info(f"  [Contact Phones] Detected: {', '.join(intel['phones'])}")
 
                 # Track visited page record
                 self.visited_records.append({
@@ -449,6 +489,13 @@ class WebCrawler:
             "email": ranked_emails[0] if ranked_emails else "",
             "emails": ranked_emails,
             "emailCount": len(ranked_emails),
+            "category": self.site_intelligence.get("category", "Corporate & Business Services"),
+            "categoryIcon": self.site_intelligence.get("category_icon", "🌐"),
+            "isEcommerce": self.site_intelligence.get("is_ecommerce", False),
+            "ecommerceSignals": self.site_intelligence.get("ecommerce_signals", []),
+            "technologies": self.site_intelligence.get("technologies", []),
+            "phones": self.site_intelligence.get("phones", []),
+            "summary": self.site_intelligence.get("summary", ""),
             "country": country_name,
             "countryCode": country_code,
             "countryFlag": country_flag,

@@ -1,7 +1,7 @@
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, List
 
-logger = logging.getLogger("TheScrapper.PlaywrightFallback")
+logger = logging.getLogger("TheScrapper.PlaywrightCrawler")
 
 try:
     from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
@@ -10,11 +10,11 @@ except ImportError:
     PLAYWRIGHT_INSTALLED = False
 
 
-class PlaywrightFallbackEngine:
+class PlaywrightCrawlerEngine:
     """
-    Manages a single reusable headless Playwright browser instance
-    for JavaScript-rendered single-page applications (SPAs) or dynamically
-    loaded pages when standard HTML responses miss important content.
+    High-performance headless Playwright Crawler for single-page applications (Next.js, React,
+    Vue, Shopify, WooCommerce). Handles dynamic client-side DOM hydration, resource blocking
+    for speed, and deep page inspection.
     """
 
     def __init__(self, headless: bool = True, timeout_ms: int = 15000):
@@ -26,7 +26,7 @@ class PlaywrightFallbackEngine:
         self.is_active = False
 
     def start(self) -> bool:
-        """Initializes the shared browser instance."""
+        """Initializes the shared Playwright browser instance with resource optimization."""
         if not PLAYWRIGHT_INSTALLED:
             logger.info("[Playwright] Playwright package is not installed. Running in standard HTTP mode.")
             return False
@@ -36,13 +36,31 @@ class PlaywrightFallbackEngine:
 
         try:
             self._pw = sync_playwright().start()
-            self._browser = self._pw.chromium.launch(headless=self.headless)
-            self._context = self._browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width": 1280, "height": 800},
+            self._browser = self._pw.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-blink-features=AutomationControlled",
+                ],
             )
+            self._context = self._browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+                viewport={"width": 1366, "height": 768},
+                ignore_https_errors=True,
+            )
+
+            # Block heavy assets (images, fonts, media) to make crawling 5x faster
+            def block_heavy_resources(route):
+                if route.request.resource_type in ["image", "media", "font"]:
+                    route.abort()
+                else:
+                    route.continue_()
+
+            self._context.route("**/*", block_heavy_resources)
             self.is_active = True
-            logger.info("[Playwright] Shared headless browser instance started.")
+            logger.info("[Playwright] Headless Chromium crawler engine initialized with asset optimization.")
             return True
         except Exception as e:
             logger.warning(f"[Playwright] Failed to start Playwright browser: {e}. Falling back to standard requests.")
@@ -51,7 +69,7 @@ class PlaywrightFallbackEngine:
 
     def render_page(self, url: str) -> Optional[str]:
         """
-        Loads the URL using the shared browser, waits for network idle or DOM load,
+        Loads the URL using headless browser, waits for DOM hydration,
         and returns the fully rendered HTML source.
         """
         if not self.is_active or not self._context:
@@ -63,17 +81,58 @@ class PlaywrightFallbackEngine:
         try:
             page = self._context.new_page()
             page.set_default_timeout(self.timeout_ms)
-            
-            # Navigate and wait for DOM content
-            response = page.goto(url, wait_until="domcontentloaded")
-            
-            # Small grace period for client-side hydration
-            page.wait_for_timeout(1000)
-            
+
+            # Navigate and wait for DOM content loaded
+            page.goto(url, wait_until="domcontentloaded")
+
+            # Brief grace period for client-side JavaScript / Next.js hydration
+            page.wait_for_timeout(800)
+
             rendered_html = page.content()
             return rendered_html
         except Exception as err:
             logger.warning(f"[Playwright] Error rendering {url}: {err}")
+            return None
+        finally:
+            if page:
+                try:
+                    page.close()
+                except Exception:
+                    pass
+
+    def render_and_inspect(self, url: str) -> Optional[Dict[str, Any]]:
+        """
+        Renders the page with full DOM execution and directly evaluates
+        dynamic links, title, and rendered HTML.
+        """
+        if not self.is_active or not self._context:
+            started = self.start()
+            if not started:
+                return None
+
+        page: Optional[Page] = None
+        try:
+            page = self._context.new_page()
+            page.set_default_timeout(self.timeout_ms)
+
+            response = page.goto(url, wait_until="domcontentloaded")
+            page.wait_for_timeout(800)
+
+            title = page.title()
+            html = page.content()
+            status_code = response.status if response else 200
+
+            # Extract dynamic links directly from DOM
+            hrefs = page.eval_on_selector_all("a[href]", "elements => elements.map(e => e.getAttribute('href'))")
+
+            return {
+                "html": html,
+                "title": title,
+                "status_code": status_code,
+                "links": [h for h in hrefs if h],
+            }
+        except Exception as err:
+            logger.warning(f"[Playwright] Error during page inspection of {url}: {err}")
             return None
         finally:
             if page:
@@ -98,4 +157,8 @@ class PlaywrightFallbackEngine:
             self._browser = None
             self._pw = None
             self.is_active = False
+
+
+# Backward-compatible alias
+PlaywrightFallbackEngine = PlaywrightCrawlerEngine
 

@@ -16,6 +16,11 @@ import {
   ExternalLink,
   ShieldCheck,
   Network,
+  Phone,
+  ShoppingBag,
+  Cpu,
+  Tag,
+  Sparkles,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -155,6 +160,25 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         existing.emailCount = mergedEmails.length;
         existing.email = mergedEmails[0] || existing.email;
         existing.pagesCrawled = Math.max(existing.pagesCrawled || 1, r.pagesCrawled || 1);
+        if (r.category && r.category !== 'Corporate & Business Services') {
+          existing.category = r.category;
+          existing.categoryIcon = r.categoryIcon;
+        }
+        if (r.isEcommerce) {
+          existing.isEcommerce = true;
+        }
+        if (Array.isArray(r.ecommerceSignals) && r.ecommerceSignals.length > 0) {
+          existing.ecommerceSignals = Array.from(new Set([...(existing.ecommerceSignals || []), ...r.ecommerceSignals]));
+        }
+        if (Array.isArray(r.technologies) && r.technologies.length > 0) {
+          existing.technologies = Array.from(new Set([...(existing.technologies || []), ...r.technologies]));
+        }
+        if (Array.isArray(r.phones) && r.phones.length > 0) {
+          existing.phones = Array.from(new Set([...(existing.phones || []), ...r.phones]));
+        }
+        if (r.summary && !existing.summary) {
+          existing.summary = r.summary;
+        }
         if (r.country && r.country !== 'Detected') {
           existing.country = r.country;
           existing.countryCode = r.countryCode;
@@ -478,16 +502,41 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                         if (!isExpanded) e.currentTarget.style.background = 'transparent';
                       }}
                     >
-                      {/* Column 1: Target Domain */}
+                      {/* Column 1: Target Domain & Content Intelligence */}
                       <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <Globe size={16} color="#0284c7" style={{ flexShrink: 0 }} />
+                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                          <Globe size={16} color="#0284c7" style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div>
-                            <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13.5px' }}>
-                              {r.domain}
-                            </span>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                              {r.pagesCrawled ? `${r.pagesCrawled} pages crawled` : 'Scope Target'}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13.5px' }}>
+                                {r.domain}
+                              </span>
+                              {r.isEcommerce && (
+                                <span
+                                  style={{
+                                    fontSize: '10.5px',
+                                    fontWeight: 700,
+                                    color: '#065f46',
+                                    background: '#d1fae5',
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
+                                    border: '1px solid #a7f3d0',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                  }}
+                                  title="E-Commerce & Online Store Detected"
+                                >
+                                  🛒 E-Commerce
+                                </span>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                              <span style={{ color: '#0369a1', fontWeight: 600 }}>
+                                {r.categoryIcon || '🌐'} {r.category || 'Corporate'}
+                              </span>
+                              <span>•</span>
+                              <span>{r.pagesCrawled ? `${r.pagesCrawled} pages` : 'Scope'}</span>
                             </div>
                           </div>
                         </div>
@@ -700,6 +749,121 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               gap: '14px',
                             }}
                           >
+                            {/* Website Intelligence & Content Classification */}
+                            <div
+                              style={{
+                                background: '#f8fafc',
+                                border: '1px solid #e2e8f0',
+                                borderRadius: '8px',
+                                padding: '12px 14px',
+                                display: 'flex',
+                                flexDirection: 'column',
+                                gap: '8px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontSize: '18px' }}>{r.categoryIcon || '🌐'}</span>
+                                  <div>
+                                    <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                      {r.category || 'Corporate & Business Services'}
+                                    </span>
+                                    {r.isEcommerce && (
+                                      <span
+                                        style={{
+                                          marginLeft: '8px',
+                                          fontSize: '11px',
+                                          fontWeight: 700,
+                                          color: '#065f46',
+                                          background: '#d1fae5',
+                                          padding: '2px 7px',
+                                          borderRadius: '4px',
+                                          border: '1px solid #a7f3d0',
+                                        }}
+                                      >
+                                        🛒 E-Commerce Store
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {Array.isArray(r.technologies) && r.technologies.length > 0 && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', flexWrap: 'wrap' }}>
+                                    <Cpu size={12} color="#64748b" />
+                                    <span style={{ fontSize: '11px', fontWeight: 600, color: '#64748b' }}>Tech:</span>
+                                    {r.technologies.map((t) => (
+                                      <span
+                                        key={t}
+                                        style={{
+                                          fontSize: '10.5px',
+                                          fontWeight: 600,
+                                          color: '#475569',
+                                          background: '#f1f5f9',
+                                          padding: '1px 6px',
+                                          borderRadius: '4px',
+                                          border: '1px solid #e2e8f0',
+                                        }}
+                                      >
+                                        {t}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {r.summary && (
+                                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.4, fontStyle: 'italic' }}>
+                                  "{r.summary}"
+                                </p>
+                              )}
+
+                              {Array.isArray(r.ecommerceSignals) && r.ecommerceSignals.length > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
+                                  <span style={{ fontSize: '11px', fontWeight: 600, color: '#047857' }}>Store Signals:</span>
+                                  {r.ecommerceSignals.map((sig) => (
+                                    <span
+                                      key={sig}
+                                      style={{
+                                        fontSize: '10.5px',
+                                        fontWeight: 600,
+                                        color: '#065f46',
+                                        background: '#ecfdf5',
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        border: '1px solid #a7f3d0',
+                                      }}
+                                    >
+                                      ✓ {sig}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+
+                              {Array.isArray(r.phones) && r.phones.length > 0 && (
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
+                                  <Phone size={12} color="#0284c7" />
+                                  <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-main)' }}>Contact Phone:</span>
+                                  {r.phones.map((phone) => (
+                                    <a
+                                      key={phone}
+                                      href={`tel:${phone}`}
+                                      style={{
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        color: '#0284c7',
+                                        textDecoration: 'none',
+                                        background: '#e0f2fe',
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                      }}
+                                    >
+                                      {phone}
+                                    </a>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+
                             {/* Subdomains section */}
                             <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>

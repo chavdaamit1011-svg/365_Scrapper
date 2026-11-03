@@ -22,8 +22,8 @@ DEFAULT_CRAWLER_CONFIG = {
     # Compliance
     "respect_robots_txt": True,
     
-    # Playwright JavaScript Fallback
-    "use_playwright_fallback": False,
+    # Playwright JavaScript Hybrid Crawler Engine
+    "use_playwright_fallback": True,
     "playwright_headless": True,
     
     # Storage Configuration

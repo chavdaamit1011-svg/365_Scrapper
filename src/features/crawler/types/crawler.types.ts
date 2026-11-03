@@ -13,6 +13,13 @@ export interface ScrapedDataRecord {
   email: string;
   emails?: string[];
   emailCount?: number;
+  category?: string;
+  categoryIcon?: string;
+  isEcommerce?: boolean;
+  ecommerceSignals?: string[];
+  technologies?: string[];
+  phones?: string[];
+  summary?: string;
   country: string;
   countryCode: string;
   countryFlag: string;
