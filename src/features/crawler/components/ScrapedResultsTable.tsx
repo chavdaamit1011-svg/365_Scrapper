@@ -142,8 +142,17 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       const isRecordOffline =
         r.status === 'OFFLINE' ||
         r.status === 'UNREACHABLE' ||
+        r.status === 'TIMED_OUT' ||
+        r.status === 'DNS_ERROR' ||
+        r.status === 'CONNECTION_REFUSED' ||
+        r.status === 'SSL_ERROR' ||
+        (typeof r.status === 'string' && r.status.startsWith('HTTP_')) ||
         (r.pagesCrawled === 0 && (!r.emails || r.emails.length === 0)) ||
         (Array.isArray(r.crawledPages) && r.crawledPages.some((p) => (p.statusCode && p.statusCode >= 500) || p.title?.includes('Unreachable')));
+
+      const effectiveStatus = r.status && r.status !== 'OFFLINE' ? r.status : (isRecordOffline ? (r.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : r.errorCode === 'ERR_CONNECTION_TIMED_OUT' ? 'TIMED_OUT' : r.errorCode === 'ERR_CONNECTION_REFUSED' ? 'CONNECTION_REFUSED' : 'OFFLINE') : (r.status || 'RESOLVED'));
+      const effectiveCategory = isRecordOffline ? (r.errorTitle || (effectiveStatus === 'DNS_ERROR' ? 'DNS Resolution Failed' : effectiveStatus === 'TIMED_OUT' ? 'Connection Timed Out' : effectiveStatus === 'CONNECTION_REFUSED' ? 'Connection Refused' : 'Site Inaccessible')) : (r.category || 'Corporate & Business Services');
+      const effectiveSummary = isRecordOffline ? (r.summary || `${effectiveCategory} (${r.errorCode || effectiveStatus}). No live HTML content could be loaded.`) : (r.summary || '');
 
       // Collect crawled pages
       const rawPageList: CrawledPageDetail[] = [];
@@ -164,12 +173,12 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           ...r,
           id: r.id || `dom_${domainKey}`,
           domain: domainKey,
-          status: isRecordOffline ? 'OFFLINE' : (r.status || 'RESOLVED'),
-          category: isRecordOffline ? 'Site Inaccessible / Offline' : (r.category || 'Corporate & Business Services'),
+          status: effectiveStatus,
+          category: effectiveCategory,
           categoryIcon: isRecordOffline ? '⚠️' : (r.categoryIcon || '🌐'),
-          summary: isRecordOffline
-            ? (r.summary || 'Website server took too long to respond (ERR_CONNECTION_TIMED_OUT). No live HTML pages could be reached.')
-            : (r.summary || ''),
+          summary: effectiveSummary,
+          errorCode: r.errorCode,
+          errorTitle: r.errorTitle,
           subdomains: Array.from(new Set(subList)),
           subdomainCount: subList.length,
           email: rankedEmails[0] || '',
@@ -184,10 +193,12 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         const mergedEmails = rankAndFilterEmails([...(existing.emails || []), ...rawEmailList], domainKey);
 
         if (isRecordOffline) {
-          existing.status = 'OFFLINE';
-          existing.category = 'Site Inaccessible / Offline';
+          existing.status = effectiveStatus;
+          existing.category = effectiveCategory;
           existing.categoryIcon = '⚠️';
           if (r.summary) existing.summary = r.summary;
+          if (r.errorCode) existing.errorCode = r.errorCode;
+          if (r.errorTitle) existing.errorTitle = r.errorTitle;
           existing.pagesCrawled = 0;
         }
 
@@ -576,9 +587,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     alignItems: 'center',
                                     gap: '3px',
                                   }}
-                                  title="Website is offline or server timed out"
+                                  title={r.errorCode ? `${r.errorTitle || 'Error'}: ${r.errorCode}` : 'Target host unreachable'}
                                 >
-                                  ⚠️ Offline / Band He
+                                  ⚠️ {r.status === 'TIMED_OUT' ? 'TIMED_OUT' : r.status === 'DNS_ERROR' ? 'DNS_ERROR' : r.status === 'CONNECTION_REFUSED' ? 'CONNECTION_REFUSED' : r.status === 'SSL_ERROR' ? 'SSL_ERROR' : (r.errorCode || r.status || 'OFFLINE')}
                                 </span>
                               ) : r.isEcommerce ? (
                                 <span
@@ -603,7 +614,8 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                             {isOffline ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginTop: '3px' }}>
                                 <span style={{ color: '#dc2626', fontWeight: 600 }}>
-                                  ⚠️ Site Inaccessible (Server Timed Out)
+                                  ⚠️ {r.errorTitle || (r.status === 'TIMED_OUT' ? 'Connection Timed Out' : r.status === 'DNS_ERROR' ? 'DNS Resolution Failed' : r.status === 'CONNECTION_REFUSED' ? 'Connection Refused' : r.status === 'SSL_ERROR' ? 'SSL Handshake Error' : 'Site Inaccessible')}
+                                  {r.errorCode ? ` (${r.errorCode})` : ''}
                                 </span>
                                 <span>•</span>
                                 <button
@@ -619,7 +631,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     textDecoration: 'underline',
                                     fontSize: '11px',
                                   }}
-                                  title="Click to view offline error diagnostics"
+                                  title="Click to view error diagnostics"
                                 >
                                   0 pages crawled
                                 </button>
@@ -834,14 +846,16 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
                         <Badge
                           variant={
-                            isOffline || r.status === 'OFFLINE' || r.status === 'UNREACHABLE'
+                            ['OFFLINE', 'UNREACHABLE', 'TIMED_OUT', 'DNS_ERROR', 'CONNECTION_REFUSED'].includes(r.status) || (typeof r.status === 'string' && r.status.startsWith('HTTP_'))
                               ? 'danger'
+                              : r.status === 'SSL_ERROR'
+                              ? 'warning'
                               : r.status === 'RESOLVED'
                               ? 'success'
                               : 'primary'
                           }
                         >
-                          {isOffline || r.status === 'OFFLINE' ? 'OFFLINE' : r.status}
+                          {r.status || (isOffline ? 'OFFLINE' : 'RESOLVED')}
                         </Badge>
                       </td>
 
@@ -952,7 +966,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 <div style={{ flex: 1 }}>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px', flexWrap: 'wrap' }}>
                                     <span style={{ fontSize: '14px', fontWeight: 700, color: '#9f1239' }}>
-                                      Website Band He / Site Can't Be Reached
+                                      {r.errorTitle || (r.status === 'TIMED_OUT' ? 'Connection Timed Out' : r.status === 'DNS_ERROR' ? 'DNS Resolution Failed' : r.status === 'CONNECTION_REFUSED' ? 'Connection Refused' : r.status === 'SSL_ERROR' ? 'SSL Protocol Error' : "Target Host Unreachable")}
                                     </span>
                                     <span
                                       style={{
@@ -965,14 +979,20 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                         letterSpacing: '0.5px',
                                       }}
                                     >
-                                      OFFLINE (TIMED OUT)
+                                      {r.errorCode || r.status || 'UNREACHABLE'}
                                     </span>
                                   </div>
                                   <p style={{ fontSize: '12.5px', color: '#be123c', margin: '0 0 6px 0', lineHeight: 1.45 }}>
-                                    {r.summary || 'Target website server respond nahi kar raha (ERR_CONNECTION_TIMED_OUT). Server band ya unreachable hone ki wajah se koi bhi live page content, email ya phone number scrap nahi ho paya.'}
+                                    {r.summary || (r.status === 'TIMED_OUT'
+                                      ? 'Target website server took too long to respond (ERR_CONNECTION_TIMED_OUT). Server did not respond within timeout limits.'
+                                      : r.status === 'DNS_ERROR'
+                                      ? 'Domain name could not be resolved (ERR_NAME_NOT_RESOLVED). No valid DNS A/AAAA records found for host.'
+                                      : r.status === 'CONNECTION_REFUSED'
+                                      ? 'Connection was refused by target host (ERR_CONNECTION_REFUSED).'
+                                      : 'Target website server is inaccessible. No live HTML content could be loaded.')}
                                   </p>
                                   <div style={{ display: 'flex', alignItems: 'center', gap: '12px', fontSize: '11px', color: '#881337', flexWrap: 'wrap' }}>
-                                    <span>• Server Status: <strong>Connection Timed Out / Server Offline</strong></span>
+                                    <span>• Server Status: <strong>{r.errorTitle || r.status || 'Host Inaccessible'} {r.errorCode ? `(${r.errorCode})` : ''}</strong></span>
                                     <span>• Target Scope: <code style={{ background: '#ffe4e6', padding: '1px 5px', borderRadius: '3px' }}>{r.domain}</code></span>
                                     <span>• Live Pages Crawled: <strong>0 (Inaccessible)</strong></span>
                                   </div>
@@ -1140,7 +1160,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </div>
                                 <span style={{ fontSize: '11px', color: isOffline ? '#b91c1c' : '#64748b' }}>
                                   {isOffline
-                                    ? 'Host server timed out. 0 live pages could be fetched'
+                                    ? `${r.errorTitle || 'Host server unreachable'}. 0 live pages could be fetched`
                                     : (crawledPages.length > 1
                                       ? 'Direct internal paths, contact routes & navigation pages analyzed'
                                       : 'Target root landing page analyzed')}
@@ -1152,7 +1172,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px', padding: '8px 12px', borderRadius: '6px', background: '#ffffff', border: '1px solid #fecdd3', fontSize: '12px' }}>
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
                                       <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'monospace', padding: '1px 6px', borderRadius: '4px', background: '#dc2626', color: '#ffffff' }}>
-                                        ERR_TIMEOUT
+                                        {r.errorCode || (r.status === 'TIMED_OUT' ? 'ERR_CONNECTION_TIMED_OUT' : r.status === 'DNS_ERROR' ? 'ERR_NAME_NOT_RESOLVED' : r.status === 'CONNECTION_REFUSED' ? 'ERR_CONNECTION_REFUSED' : 'ERR_UNREACHABLE')}
                                       </span>
                                       <span style={{ fontSize: '10px', fontWeight: 600, color: '#991b1b', background: '#ffe4e6', padding: '1px 5px', borderRadius: '3px' }}>
                                         depth 0
@@ -1167,11 +1187,11 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                         <ExternalLink size={10} />
                                       </a>
                                       <span style={{ fontSize: '11.5px', color: '#9f1239', fontStyle: 'italic' }}>
-                                        — Website Band He / Server Timed Out (0 pages accessible)
+                                        — {r.errorTitle || (r.status === 'TIMED_OUT' ? 'Connection Timed Out' : r.status === 'DNS_ERROR' ? 'DNS Resolution Failed' : r.status === 'CONNECTION_REFUSED' ? 'Connection Refused' : 'Target Host Inaccessible')} ({r.errorCode || r.status || '0 pages accessible'})
                                       </span>
                                     </div>
                                     <span style={{ fontSize: '11px', color: '#e11d48', fontWeight: 700 }}>
-                                      Host Unreachable
+                                      {r.errorCode || 'Host Unreachable'}
                                     </span>
                                   </div>
                                 ) : (

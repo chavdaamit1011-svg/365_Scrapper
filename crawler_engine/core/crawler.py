@@ -120,9 +120,55 @@ class WebCrawler:
 
         # Website Intelligence state (populated only when HTML is actually fetched)
         self.site_intelligence: Dict[str, Any] = {}
+        self.error_type: Optional[str] = None
+        self.error_code: Optional[str] = None
+        self.error_title: Optional[str] = None
         self.last_network_error: Optional[str] = None
         self.last_status_code: Optional[int] = None
         self.has_fetched_content: bool = False
+
+    def _record_network_error(self, exc: Any, status_code: Optional[int] = None) -> None:
+        """
+        Extracts and records the precise technical network error code and user-facing title.
+        Strictly prevents generic, informal, or slang messages.
+        """
+        err_str = str(exc).lower()
+        if "err_name_not_resolved" in err_str or "getaddrinfo failed" in err_str or "nameresolutionerror" in err_str:
+            self.error_type = "DNS_ERROR"
+            self.error_code = "ERR_NAME_NOT_RESOLVED"
+            self.error_title = "DNS Resolution Failed"
+            self.last_network_error = "DNS Resolution Failed (ERR_NAME_NOT_RESOLVED)"
+            self.last_status_code = status_code or 502
+        elif "err_connection_timed_out" in err_str or "timed out" in err_str or "timeouterror" in err_str:
+            self.error_type = "TIMED_OUT"
+            self.error_code = "ERR_CONNECTION_TIMED_OUT"
+            self.error_title = "Connection Timed Out"
+            self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
+            self.last_status_code = status_code or 504
+        elif "err_connection_refused" in err_str or "connection refused" in err_str:
+            self.error_type = "CONNECTION_REFUSED"
+            self.error_code = "ERR_CONNECTION_REFUSED"
+            self.error_title = "Connection Refused"
+            self.last_network_error = "Connection Refused (ERR_CONNECTION_REFUSED)"
+            self.last_status_code = status_code or 503
+        elif "ssl" in err_str or "certificate" in err_str or "err_ssl_protocol_error" in err_str:
+            self.error_type = "SSL_ERROR"
+            self.error_code = "ERR_SSL_PROTOCOL_ERROR"
+            self.error_title = "SSL Certificate Error"
+            self.last_network_error = "SSL Handshake Error (ERR_SSL_PROTOCOL_ERROR)"
+            self.last_status_code = status_code or 495
+        elif status_code and status_code >= 400:
+            self.error_type = f"HTTP_{status_code}"
+            self.error_code = f"HTTP_{status_code}"
+            self.error_title = f"HTTP {status_code}"
+            self.last_network_error = f"HTTP Error {status_code}"
+            self.last_status_code = status_code
+        else:
+            self.error_type = "UNREACHABLE"
+            self.error_code = "ERR_NETWORK_FAILURE"
+            self.error_title = "Host Unreachable"
+            self.last_network_error = f"Network Connection Failed: {exc}"
+            self.last_status_code = status_code or 503
 
     def _init_robots_txt(self) -> None:
         """Fetches and parses robots.txt for the target domain."""
@@ -164,16 +210,7 @@ class WebCrawler:
                     return rendered, 200, "text/html"
             except Exception as pw_err:
                 logger.warning(f"[PlaywrightCrawler] Root page render fallback to HTTP: {pw_err}")
-                pw_err_str = str(pw_err).lower()
-                if "net::err_connection_timed_out" in pw_err_str or "timeouterror" in pw_err_str or "timed out" in pw_err_str:
-                    self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
-                    self.last_status_code = 504
-                elif "net::err_name_not_resolved" in pw_err_str:
-                    self.last_network_error = "DNS Resolution Failed (Domain Inactive / Offline)"
-                    self.last_status_code = 502
-                elif "net::err_connection_refused" in pw_err_str:
-                    self.last_network_error = "Connection Refused (Server Down / Offline)"
-                    self.last_status_code = 503
+                self._record_network_error(pw_err)
 
         retries = self.config.get("retries", 2)
         timeout = self.config.get("timeout", 10)
@@ -219,13 +256,7 @@ class WebCrawler:
                         return rendered, 200, "text/html"
 
                 if response.status_code >= 400:
-                    self.last_status_code = response.status_code
-                    if response.status_code in (502, 503, 504):
-                        self.last_network_error = f"Server Error (HTTP {response.status_code})"
-                    elif response.status_code in (401, 403):
-                        self.last_network_error = f"Access Blocked (HTTP {response.status_code})"
-                    elif response.status_code == 404:
-                        self.last_network_error = f"Page Not Found (HTTP 404)"
+                    self._record_network_error(f"HTTP {response.status_code}", status_code=response.status_code)
                     if url != self.start_url:
                         logger.debug(f"HTTP {response.status_code} received on {url}")
                         return None
@@ -234,14 +265,12 @@ class WebCrawler:
                 self.last_status_code = response.status_code
                 return html, response.status_code, content_type
 
-            except requests.exceptions.Timeout:
+            except requests.exceptions.Timeout as timeout_err:
                 logger.warning(f"Timeout on {url} (Attempt {attempt}/{retries + 1})")
-                self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
-                self.last_status_code = 504
+                self._record_network_error(timeout_err, status_code=504)
             except requests.exceptions.SSLError as ssl_err:
                 logger.warning(f"SSL Error on {url}: {ssl_err}. Setting session SSL verification to False...")
-                self.last_network_error = f"SSL Handshake Error ({ssl_err})"
-                self.last_status_code = 495
+                self._record_network_error(ssl_err, status_code=495)
                 self.session.verify = False
                 try:
                     import urllib3
@@ -263,22 +292,10 @@ class WebCrawler:
                 break
             except requests.exceptions.ConnectionError as conn_err:
                 logger.warning(f"Connection error on {url}: {conn_err} (Attempt {attempt}/{retries + 1})")
-                err_text = str(conn_err).lower()
-                if "getaddrinfo failed" in err_text or "nameresolutionerror" in err_text:
-                    self.last_network_error = "DNS Resolution Failed (Domain Inactive / Offline)"
-                    self.last_status_code = 502
-                elif "connection refused" in err_text:
-                    self.last_network_error = "Connection Refused (Server Down / Offline)"
-                    self.last_status_code = 503
-                elif "timed out" in err_text or "timeout" in err_text:
-                    self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
-                    self.last_status_code = 504
-                else:
-                    self.last_network_error = "Network Connection Failed (Host Unreachable)"
-                    self.last_status_code = 503
+                self._record_network_error(conn_err)
             except requests.exceptions.RequestException as req_err:
                 logger.warning(f"Request error on {url}: {req_err} (Attempt {attempt}/{retries + 1})")
-                self.last_network_error = f"Request Error: {req_err}"
+                self._record_network_error(req_err)
 
             time.sleep(1.0)
 
@@ -292,16 +309,7 @@ class WebCrawler:
                     self.last_status_code = 200
                     return rendered, 200, "text/html"
             except Exception as pw_err:
-                pw_err_str = str(pw_err).lower()
-                if "net::err_connection_timed_out" in pw_err_str or "timeouterror" in pw_err_str or "timed out" in pw_err_str:
-                    self.last_network_error = "Connection Timed Out (ERR_CONNECTION_TIMED_OUT)"
-                    self.last_status_code = 504
-                elif "net::err_name_not_resolved" in pw_err_str:
-                    self.last_network_error = "DNS Resolution Failed (Domain Inactive / Offline)"
-                    self.last_status_code = 502
-                elif "net::err_connection_refused" in pw_err_str:
-                    self.last_network_error = "Connection Refused (Server Down / Offline)"
-                    self.last_status_code = 503
+                self._record_network_error(pw_err)
 
         return None
 
@@ -387,7 +395,7 @@ class WebCrawler:
 
         # Phase 1: OSINT Certificate Transparency & DNS Subdomain Discovery
         logger.info(f"[Subdomain Recon] Running OSINT discovery for: {self.root_domain}")
-        osint_subdomains = discover_subdomains_via_osint(self.root_domain)
+        osint_subdomains = discover_subdomains_via_osint(self.root_domain, mongo_storage=self.mongo_storage)
         for s in osint_subdomains:
             if s not in self.all_subdomains:
                 self.all_subdomains.add(s)
@@ -735,39 +743,41 @@ class WebCrawler:
         # Check if site is completely offline / unreachable
         is_site_offline = len(self.visited_records) == 0
 
-        final_status = "OFFLINE" if is_site_offline else "RESOLVED"
-        final_category = (
-            "Site Inaccessible / Offline"
-            if is_site_offline
-            else self.site_intelligence.get("category", "Corporate & Business Services")
-        )
-        final_category_icon = "⚠️" if is_site_offline else self.site_intelligence.get("category_icon", "🌐")
-        final_summary = (
-            f"Target website is down or unreachable ({self.last_network_error or 'Connection timed out / ERR_CONNECTION_TIMED_OUT'}). No live HTML content could be loaded."
-            if is_site_offline
-            else self.site_intelligence.get("summary", "")
-        )
-
-        crawled_pages_list = [
-            {
-                "url": r["url"],
-                "title": r.get("title", ""),
-                "statusCode": r.get("status_code", 200),
-                "depth": r.get("depth", 0),
-                "timestamp": r.get("timestamp"),
-            }
-            for r in self.visited_records
-        ]
-
         if is_site_offline:
+            final_status = self.error_type or ("DNS_ERROR" if "dns" in (self.last_network_error or "").lower() else "TIMED_OUT")
+            final_error_code = self.error_code or ("ERR_NAME_NOT_RESOLVED" if "dns" in (self.last_network_error or "").lower() else "ERR_CONNECTION_TIMED_OUT")
+            final_error_title = self.error_title or ("DNS Resolution Failed" if "dns" in (self.last_network_error or "").lower() else "Connection Timed Out")
+            final_category = final_error_title
+            final_category_icon = "⚠️"
+            final_summary = f"{self.last_network_error or final_error_title}. Target scope ({self.root_domain}) could not be reached."
+
             crawled_pages_list = [
                 {
                     "url": self.start_url,
-                    "title": f"Unreachable: {self.last_network_error or 'Connection Timed Out'}",
+                    "title": final_error_title,
+                    "errorCode": final_error_code,
                     "statusCode": self.last_status_code or 504,
                     "depth": 0,
                     "timestamp": datetime.datetime.now().isoformat(),
                 }
+            ]
+        else:
+            final_status = "RESOLVED"
+            final_error_code = None
+            final_error_title = None
+            final_category = self.site_intelligence.get("category", "Corporate & Business Services")
+            final_category_icon = self.site_intelligence.get("category_icon", "🌐")
+            final_summary = self.site_intelligence.get("summary", "")
+
+            crawled_pages_list = [
+                {
+                    "url": r["url"],
+                    "title": r.get("title", ""),
+                    "statusCode": r.get("status_code", 200),
+                    "depth": r.get("depth", 0),
+                    "timestamp": r.get("timestamp"),
+                }
+                for r in self.visited_records
             ]
 
         domain_record = {
@@ -792,6 +802,8 @@ class WebCrawler:
             "countryCode": country_code,
             "countryFlag": country_flag,
             "status": final_status,
+            "errorCode": final_error_code,
+            "errorTitle": final_error_title,
             "sourceUrl": self.start_url,
             "pagesCrawled": len(self.visited_records),
             "crawledPages": crawled_pages_list,

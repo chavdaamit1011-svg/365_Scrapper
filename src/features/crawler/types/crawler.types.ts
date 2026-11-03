@@ -1,6 +1,18 @@
 export type CrawlerExecutionState = 'IDLE' | 'RUNNING' | 'PAUSED' | 'CANCELLED' | 'COMPLETED';
 
-export type CrawlRecordStatus = 'RESOLVED' | 'ACTIVE' | 'PENDING' | 'ERROR' | 'OFFLINE' | 'UNREACHABLE' | 'DISCOVERING';
+export type CrawlRecordStatus =
+  | 'RESOLVED'
+  | 'ACTIVE'
+  | 'PENDING'
+  | 'ERROR'
+  | 'OFFLINE'
+  | 'UNREACHABLE'
+  | 'DISCOVERING'
+  | 'TIMED_OUT'
+  | 'DNS_ERROR'
+  | 'CONNECTION_REFUSED'
+  | 'SSL_ERROR'
+  | string;
 
 export interface VerifiedEmailDetail {
   email: string;
@@ -16,6 +28,7 @@ export interface CrawledPageDetail {
   url: string;
   title?: string;
   statusCode?: number;
+  errorCode?: string;
   depth?: number;
   timestamp?: string;
 }
@@ -45,6 +58,8 @@ export interface ScrapedDataRecord {
   countryCode: string;
   countryFlag: string;
   status: CrawlRecordStatus;
+  errorCode?: string;
+  errorTitle?: string;
   pagesCrawled?: number;
   discoveredAt: string;
 }

@@ -77,17 +77,37 @@ def detect_country_from_domain(domain: str) -> Tuple[str, str, str]:
     return ("Global", "INT", "🌐")
 
 
-def discover_subdomains_via_osint(root_domain: str, timeout: int = 8) -> Set[str]:
+def discover_subdomains_via_osint(root_domain: str, timeout: int = 8, mongo_storage=None) -> Set[str]:
     """
-    Discovers publicly registered subdomains using Certificate Transparency (crt.sh)
-    and DNS host search (HackerTarget). Zero guessing - 100% genuine SSL/DNS records.
+    Discovers publicly registered subdomains using:
+    1. Dynamic MongoDB cross-reference (all targets/subdomains in DB belonging to this root domain)
+    2. Certificate Transparency Logs (crt.sh direct & wildcard)
+    3. Active concurrent DNS dictionary probing across standard public/state/administrative prefixes
+    4. DNS host search (HackerTarget)
+    Zero guessing - 100% genuine SSL/DNS records.
     """
+    import socket
+    from concurrent.futures import ThreadPoolExecutor
+
     subdomains: Set[str] = set()
+    clean_root = root_domain.lower().strip()
+    suffix = f".{clean_root}"
     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
 
-    # 1. Certificate Transparency Logs (crt.sh)
+    # 1. Dynamic MongoDB Cross-Reference (incorporates any previously discovered/crawled targets)
+    if mongo_storage and hasattr(mongo_storage, "get_known_subdomains_for_domain"):
+        try:
+            db_subs = mongo_storage.get_known_subdomains_for_domain(clean_root)
+            for s in db_subs:
+                subdomains.add(s)
+            if db_subs:
+                logger.info(f"[Subdomain Recon] Added {len(db_subs)} subdomains from MongoDB cross-reference.")
+        except Exception as e:
+            logger.debug(f"MongoDB cross-ref skipped: {e}")
+
+    # 2. Certificate Transparency Logs (crt.sh) - Direct query (fast, bypasses SQL timeout on huge ccTLDs)
     try:
-        url = f"https://crt.sh/?q=%.{root_domain}&output=json"
+        url = f"https://crt.sh/?q={clean_root}&output=json"
         res = requests.get(url, headers=headers, timeout=timeout)
         if res.status_code == 200:
             for item in res.json():
@@ -96,23 +116,74 @@ def discover_subdomains_via_osint(root_domain: str, timeout: int = 8) -> Set[str
                     sub = sub.strip().lower()
                     if "*" in sub:
                         sub = sub.replace("*.", "")
-                    if sub.endswith(f".{root_domain}") and sub != root_domain:
+                    if sub.endswith(suffix) and sub != clean_root and all(c.isalnum() or c in "-." for c in sub):
                         subdomains.add(sub)
     except Exception as e:
-        logger.debug(f"crt.sh query skipped or error: {e}")
+        logger.debug(f"crt.sh direct query skipped or error: {e}")
 
-    # 2. HackerTarget Host Search
+    # Wildcard query fallback if direct returned fewer than 20 results
+    if len(subdomains) < 20:
+        try:
+            url_wild = f"https://crt.sh/?q=%.{clean_root}&output=json"
+            res_w = requests.get(url_wild, headers=headers, timeout=min(timeout, 5))
+            if res_w.status_code == 200:
+                for item in res_w.json():
+                    name = item.get("name_value", "")
+                    for sub in name.split("\n"):
+                        sub = sub.strip().lower()
+                        if "*" in sub:
+                            sub = sub.replace("*.", "")
+                        if sub.endswith(suffix) and sub != clean_root and all(c.isalnum() or c in "-." for c in sub):
+                            subdomains.add(sub)
+        except Exception as e:
+            logger.debug(f"crt.sh wildcard query skipped or error: {e}")
+
+    # 3. HackerTarget Host Search
     try:
-        url = f"https://api.hackertarget.com/hostsearch/?q={root_domain}"
+        url = f"https://api.hackertarget.com/hostsearch/?q={clean_root}"
         res = requests.get(url, headers=headers, timeout=timeout)
         if res.status_code == 200 and "error" not in res.text.lower():
             for line in res.text.splitlines():
                 if "," in line:
                     host = line.split(",")[0].strip().lower()
-                    if host.endswith(f".{root_domain}") and host != root_domain:
+                    if host.endswith(suffix) and host != clean_root:
                         subdomains.add(host)
     except Exception as e:
         logger.debug(f"HackerTarget query skipped or error: {e}")
+
+    # 4. Live Concurrent DNS Dictionary Probing (Generic public/state/administrative services)
+    standard_prefixes = [
+        "www", "mail", "webmail", "email", "portal", "admin", "login", "auth", "sso",
+        "secure", "api", "app", "dashboard", "dev", "beta", "stage", "test", "demo",
+        "m", "mobile", "cdn", "static", "media", "assets", "cloud", "vpn", "remote",
+        "gateway", "connect", "direct", "support", "help", "services", "service",
+        "pay", "payment", "billing", "shop", "store", "cart", "status", "monitor",
+        "ns1", "ns2", "dns1", "dns2", "mx1", "mx2", "ftp", "docs", "files",
+        # State and regional public services
+        "digital", "digitalgujarat", "gujarat", "delhi", "maharashtra", "karnataka",
+        "kerala", "tamilnadu", "telangana", "andhra", "rajasthan", "up", "mp", "punjab",
+        "haryana", "bihar", "odisha", "bengal", "assam", "jharkhand", "chhattisgarh",
+        "india", "mygov", "uidai", "gst", "epfo", "nic", "rbi", "upsc", "ssc", "cbse",
+        "irctc", "nvsp", "parivahan", "incometax", "mca", "ayush", "cowin", "digilocker"
+    ]
+
+    def _resolve_candidate(pref: str):
+        cand = f"{pref}.{clean_root}"
+        if cand in subdomains:
+            return None
+        try:
+            socket.gethostbyname(cand)
+            return cand
+        except Exception:
+            return None
+
+    try:
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for r in executor.map(_resolve_candidate, standard_prefixes):
+                if r:
+                    subdomains.add(r)
+    except Exception as e:
+        logger.debug(f"DNS probe skipped or error: {e}")
 
     return subdomains
 

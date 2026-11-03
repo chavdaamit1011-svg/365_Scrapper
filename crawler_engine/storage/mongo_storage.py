@@ -98,3 +98,27 @@ class MongoStorage:
             logger.warning(f"[MongoDB] Failed to save raw crawl data: {e}")
             return False
 
+    def get_known_subdomains_for_domain(self, root_domain: str) -> List[str]:
+        """
+        Dynamically finds all known domains and subdomains stored in MongoDB
+        that belong to the specified root domain (e.g. digitalgujarat.gov.in -> gov.in).
+        """
+        if not self.is_connected or self.collection is None:
+            return []
+        found = set()
+        clean_root = root_domain.lower().strip()
+        suffix = f".{clean_root}"
+        try:
+            cursor = self.collection.find({}, {"domain": 1, "subdomains": 1})
+            for doc in cursor:
+                d = doc.get("domain", "").lower().strip()
+                if d.endswith(suffix) and d != clean_root:
+                    found.add(d)
+                for s in doc.get("subdomains", []):
+                    s_clean = s.lower().strip()
+                    if s_clean.endswith(suffix) and s_clean != clean_root:
+                        found.add(s_clean)
+        except Exception as e:
+            logger.debug(f"[MongoDB] Error querying existing subdomains: {e}")
+        return list(found)
+
