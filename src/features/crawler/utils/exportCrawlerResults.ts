@@ -14,6 +14,8 @@ export function exportCrawlerResultsToCSV(records: ScrapedDataRecord[], filename
     'Email Count',
     'Country',
     'Country Code',
+    'Pages Crawled Count',
+    'Crawled Page URLs',
     'Status',
     'Discovered At',
   ];
@@ -23,6 +25,12 @@ export function exportCrawlerResultsToCSV(records: ScrapedDataRecord[], filename
     const emailsStr = r.emails && r.emails.length > 0 ? r.emails.join('; ') : (r.email || '');
     const subCount = r.subdomainCount ?? (r.subdomains ? r.subdomains.length : (r.subdomain ? 1 : 0));
     const emCount = r.emailCount ?? (r.emails ? r.emails.length : (r.email ? 1 : 0));
+    const pagesList = Array.isArray(r.crawledPages) && r.crawledPages.length > 0
+      ? r.crawledPages.map((p) => p.url).join('; ')
+      : (r.pagesCrawled ? `${r.pagesCrawled} pages` : '');
+    const pagesCount = Array.isArray(r.crawledPages) && r.crawledPages.length > 0
+      ? r.crawledPages.length
+      : (r.pagesCrawled || 0);
 
     return [
       `"${(r.domain || '').replace(/"/g, '""')}"`,
@@ -32,6 +40,8 @@ export function exportCrawlerResultsToCSV(records: ScrapedDataRecord[], filename
       `"${emCount}"`,
       `"${(r.country || '').replace(/"/g, '""')}"`,
       `"${(r.countryCode || '').replace(/"/g, '""')}"`,
+      `"${pagesCount}"`,
+      `"${pagesList.replace(/"/g, '""')}"`,
       `"${(r.status || '').replace(/"/g, '""')}"`,
       `"${(r.discoveredAt || '').replace(/"/g, '""')}"`,
     ];

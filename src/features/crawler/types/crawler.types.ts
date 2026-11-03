@@ -12,6 +12,14 @@ export interface VerifiedEmailDetail {
   isPrimary?: boolean;
 }
 
+export interface CrawledPageDetail {
+  url: string;
+  title?: string;
+  statusCode?: number;
+  depth?: number;
+  timestamp?: string;
+}
+
 export interface ScrapedDataRecord {
   id: string;
   targetId?: string;
@@ -24,6 +32,8 @@ export interface ScrapedDataRecord {
   emails?: string[];
   verifiedEmails?: VerifiedEmailDetail[];
   emailCount?: number;
+  crawledPages?: CrawledPageDetail[];
+  sourceUrl?: string;
   category?: string;
   categoryIcon?: string;
   isEcommerce?: boolean;

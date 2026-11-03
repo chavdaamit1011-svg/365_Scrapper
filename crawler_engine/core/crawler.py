@@ -294,6 +294,16 @@ class WebCrawler:
                 "status": status,
                 "sourceUrl": self.start_url,
                 "pagesCrawled": len(self.visited_records),
+                "crawledPages": [
+                    {
+                        "url": r["url"],
+                        "title": r.get("title", ""),
+                        "statusCode": r.get("status_code", 200),
+                        "depth": r.get("depth", 0),
+                        "timestamp": r.get("timestamp"),
+                    }
+                    for r in self.visited_records
+                ],
                 "discoveredAt": datetime.datetime.now().isoformat(),
             }
             self.mongo_storage.sync_scraped_results([domain_record])
@@ -535,6 +545,7 @@ class WebCrawler:
                 # Track visited page record
                 self.visited_records.append({
                     "url": current_url,
+                    "title": meta.get("title", "") if meta else "",
                     "status_code": status_code,
                     "depth": depth,
                     "internal_links_count": len(internal_links),
@@ -683,6 +694,16 @@ class WebCrawler:
             "status": "RESOLVED",
             "sourceUrl": self.start_url,
             "pagesCrawled": len(self.visited_records),
+            "crawledPages": [
+                {
+                    "url": r["url"],
+                    "title": r.get("title", ""),
+                    "statusCode": r.get("status_code", 200),
+                    "depth": r.get("depth", 0),
+                    "timestamp": r.get("timestamp"),
+                }
+                for r in self.visited_records
+            ],
             "discoveredAt": datetime.datetime.now().isoformat(),
         }
 

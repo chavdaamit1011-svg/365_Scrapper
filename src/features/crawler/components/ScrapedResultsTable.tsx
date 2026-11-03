@@ -21,11 +21,12 @@ import {
   Cpu,
   Tag,
   Sparkles,
+  FileText,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { ScrapedDataRecord } from '../types/crawler.types';
+import { ScrapedDataRecord, CrawledPageDetail } from '../types/crawler.types';
 import { exportCrawlerResultsToCSV } from '../utils/exportCrawlerResults';
 
 interface ScrapedResultsTableProps {
@@ -137,6 +138,20 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       }
       const rankedEmails = rankAndFilterEmails(rawEmailList, domainKey);
 
+      // Collect crawled pages
+      const rawPageList: CrawledPageDetail[] = [];
+      if (Array.isArray(r.crawledPages) && r.crawledPages.length > 0) {
+        rawPageList.push(...r.crawledPages);
+      } else if (r.sourceUrl) {
+        rawPageList.push({
+          url: r.sourceUrl,
+          title: 'Root Scope Page',
+          statusCode: 200,
+          depth: 0,
+          timestamp: r.discoveredAt,
+        });
+      }
+
       if (!existing) {
         map.set(domainKey, {
           ...r,
@@ -147,12 +162,26 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           email: rankedEmails[0] || '',
           emails: rankedEmails,
           emailCount: rankedEmails.length,
-          pagesCrawled: r.pagesCrawled || 1,
+          crawledPages: rawPageList,
+          pagesCrawled: Math.max(r.pagesCrawled || 1, rawPageList.length || 1),
         });
       } else {
-        // Merge subdomains and emails
+        // Merge subdomains, emails, and crawled pages
         const mergedSubs = Array.from(new Set([...(existing.subdomains || []), ...subList]));
         const mergedEmails = rankAndFilterEmails([...(existing.emails || []), ...rawEmailList], domainKey);
+
+        if (rawPageList.length > 0) {
+          const seenUrls = new Set((existing.crawledPages || []).map((p) => p.url));
+          const mergedPages = [...(existing.crawledPages || [])];
+          for (const p of rawPageList) {
+            if (!seenUrls.has(p.url)) {
+              mergedPages.push(p);
+              seenUrls.add(p.url);
+            }
+          }
+          existing.crawledPages = mergedPages;
+          existing.pagesCrawled = Math.max(existing.pagesCrawled || 1, mergedPages.length);
+        }
 
         existing.subdomains = mergedSubs;
         existing.subdomainCount = mergedSubs.length;
@@ -479,6 +508,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 const isExpanded = expandedDomainId === r.id;
                 const subdomains = r.subdomains || [];
                 const emails = r.emails || [];
+                const crawledPages = r.crawledPages || [];
 
                 return (
                   <React.Fragment key={r.id || idx}>
@@ -529,7 +559,28 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 {r.categoryIcon || '🌐'} {r.category || 'Corporate'}
                               </span>
                               <span>•</span>
-                              <span>{r.pagesCrawled ? `${r.pagesCrawled} pages` : 'Scope'}</span>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(r.id)}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: 0,
+                                  cursor: 'pointer',
+                                  color: isExpanded ? '#0284c7' : 'var(--text-muted)',
+                                  fontWeight: 600,
+                                  textDecoration: 'underline',
+                                  textUnderlineOffset: '2px',
+                                  fontSize: '11px',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '3px',
+                                }}
+                                title="Click to view all crawled pages"
+                              >
+                                <FileText size={11} color={isExpanded ? '#0284c7' : '#64748b'} />
+                                <span>{crawledPages.length > 0 ? `${crawledPages.length} pages` : (r.pagesCrawled ? `${r.pagesCrawled} pages` : '1 page')}</span>
+                              </button>
                             </div>
                           </div>
                         </div>
@@ -918,6 +969,192 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                           </span>
                                         )}
                                       </a>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Crawled Pages Section */}
+                            <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px', padding: '12px 14px' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '6px' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                  <FileText size={14} color="#0284c7" />
+                                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                    Crawled Pages ({crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1)})
+                                  </span>
+                                  <span
+                                    style={{
+                                      fontSize: '10px',
+                                      fontWeight: 700,
+                                      padding: '1px 6px',
+                                      borderRadius: '4px',
+                                      background: '#e0f2fe',
+                                      color: '#0369a1',
+                                      border: '1px solid #bae6fd',
+                                    }}
+                                  >
+                                    Crawl Scope History
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '11px', color: '#64748b' }}>
+                                  {crawledPages.length > 1
+                                    ? `Direct internal paths, contact routes & navigation pages analyzed`
+                                    : `Target root landing page analyzed`}
+                                </span>
+                              </div>
+
+                              {crawledPages.length === 0 ? (
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 10px', borderRadius: '6px', background: '#ffffff', border: '1px solid #e2e8f0', fontSize: '12px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '10px', fontWeight: 700, fontFamily: 'monospace', padding: '1px 5px', borderRadius: '3px', background: '#ecfdf5', color: '#047857', border: '1px solid #a7f3d0' }}>
+                                      200 OK
+                                    </span>
+                                    <span style={{ fontSize: '10px', fontWeight: 600, color: '#64748b', background: '#f1f5f9', padding: '1px 5px', borderRadius: '3px' }}>
+                                      depth 0
+                                    </span>
+                                    <a
+                                      href={r.sourceUrl || `https://${r.domain}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      style={{ color: '#0369a1', fontWeight: 600, textDecoration: 'none', display: 'inline-flex', alignItems: 'center', gap: '4px' }}
+                                    >
+                                      <span>{r.sourceUrl || `https://${r.domain}`}</span>
+                                      <ExternalLink size={10} />
+                                    </a>
+                                  </div>
+                                  <span style={{ fontSize: '11px', color: '#64748b', fontStyle: 'italic' }}>
+                                    Target Root Scope
+                                  </span>
+                                </div>
+                              ) : (
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                                  {crawledPages.map((page, pIdx) => {
+                                    const pUrl = typeof page === 'string' ? page : page.url;
+                                    const pTitle = typeof page === 'object' ? page.title : '';
+                                    const pStatus = typeof page === 'object' ? (page.statusCode || 200) : 200;
+                                    const pDepth = typeof page === 'object' ? (page.depth ?? 0) : 0;
+
+                                    let pathDisplay = pUrl;
+                                    try {
+                                      const u = new URL(pUrl);
+                                      pathDisplay = u.pathname + (u.search || '');
+                                      if (!pathDisplay) pathDisplay = '/';
+                                    } catch {}
+
+                                    return (
+                                      <div
+                                        key={pUrl + pIdx}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          flexWrap: 'wrap',
+                                          gap: '8px',
+                                          padding: '7px 12px',
+                                          borderRadius: '6px',
+                                          background: '#ffffff',
+                                          border: '1px solid #e2e8f0',
+                                          fontSize: '12px',
+                                        }}
+                                      >
+                                        {/* Left: Status, Depth, Link, Title */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', minWidth: 0 }}>
+                                          <span
+                                            style={{
+                                              fontSize: '10px',
+                                              fontWeight: 700,
+                                              fontFamily: 'monospace',
+                                              padding: '1px 6px',
+                                              borderRadius: '4px',
+                                              background: pStatus >= 400 ? '#fef2f2' : '#ecfdf5',
+                                              color: pStatus >= 400 ? '#b91c1c' : '#047857',
+                                              border: `1px solid ${pStatus >= 400 ? '#fecaca' : '#a7f3d0'}`,
+                                            }}
+                                          >
+                                            {pStatus}
+                                          </span>
+                                          <span
+                                            style={{
+                                              fontSize: '10px',
+                                              fontWeight: 600,
+                                              color: '#64748b',
+                                              background: '#f1f5f9',
+                                              padding: '1px 5px',
+                                              borderRadius: '3px',
+                                            }}
+                                          >
+                                            depth {pDepth}
+                                          </span>
+                                          <a
+                                            href={pUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            title={`Open ${pUrl} in new tab`}
+                                            style={{
+                                              color: '#0369a1',
+                                              fontWeight: 600,
+                                              fontSize: '12px',
+                                              textDecoration: 'none',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                            }}
+                                            onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+                                          >
+                                            <span>{pathDisplay}</span>
+                                            <ExternalLink size={10} style={{ flexShrink: 0 }} />
+                                          </a>
+                                          {pTitle && (
+                                            <span
+                                              style={{
+                                                fontSize: '11px',
+                                                color: '#64748b',
+                                                fontStyle: 'italic',
+                                                maxWidth: '280px',
+                                                overflow: 'hidden',
+                                                textOverflow: 'ellipsis',
+                                                whiteSpace: 'nowrap',
+                                              }}
+                                              title={pTitle}
+                                            >
+                                              — {pTitle}
+                                            </span>
+                                          )}
+                                        </div>
+
+                                        {/* Right: Full Host / Copy URL */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                          <span
+                                            style={{
+                                              fontSize: '10.5px',
+                                              color: '#94a3b8',
+                                              fontFamily: 'monospace',
+                                              maxWidth: '240px',
+                                              overflow: 'hidden',
+                                              textOverflow: 'ellipsis',
+                                              whiteSpace: 'nowrap',
+                                            }}
+                                          >
+                                            {pUrl.replace(/^https?:\/\//, '')}
+                                          </span>
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopy(pUrl, `page_${r.id}_${pIdx}`)}
+                                            title="Copy page URL"
+                                            style={{
+                                              background: 'none',
+                                              border: 'none',
+                                              cursor: 'pointer',
+                                              padding: '2px',
+                                              color: copiedId === `page_${r.id}_${pIdx}` ? '#10b981' : '#94a3b8',
+                                            }}
+                                          >
+                                            {copiedId === `page_${r.id}_${pIdx}` ? <Check size={12} /> : <Copy size={12} />}
+                                          </button>
+                                        </div>
+                                      </div>
                                     );
                                   })}
                                 </div>

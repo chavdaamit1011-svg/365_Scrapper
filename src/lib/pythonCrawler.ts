@@ -167,6 +167,8 @@ export async function executeCrawlerOnDomain(
                 technologies: Array.isArray(d.technologies) ? d.technologies : [],
                 phones: Array.isArray(d.phones) ? d.phones : [],
                 summary: d.summary || '',
+                crawledPages: Array.isArray(d.crawledPages) ? d.crawledPages : [],
+                sourceUrl: d.sourceUrl || '',
                 pagesCrawled: d.pagesCrawled || 0,
                 discoveredAt: d.discoveredAt || new Date().toISOString(),
               };

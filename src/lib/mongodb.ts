@@ -106,6 +106,18 @@ const ScrapedResultSchema = new mongoose.Schema(
       ],
       default: [],
     },
+    crawledPages: {
+      type: [
+        {
+          url: { type: String, required: true },
+          title: { type: String, default: '' },
+          statusCode: { type: Number, default: 200 },
+          depth: { type: Number, default: 0 },
+          timestamp: { type: String, default: '' },
+        },
+      ],
+      default: [],
+    },
     category: { type: String, default: 'Corporate & Business Services' },
     categoryIcon: { type: String, default: '🌐' },
     isEcommerce: { type: Boolean, default: false },

@@ -37,10 +37,12 @@ export async function GET() {
       technologies: Array.isArray(d.technologies) ? d.technologies : [],
       phones: Array.isArray(d.phones) ? d.phones : [],
       summary: d.summary || '',
+      crawledPages: Array.isArray(d.crawledPages) ? d.crawledPages : [],
       country: d.country || 'Detected',
       countryCode: d.countryCode || 'INT',
       countryFlag: d.countryFlag || '🌐',
       status: d.status || 'RESOLVED',
+      sourceUrl: d.sourceUrl || '',
       pagesCrawled: d.pagesCrawled || 0,
       discoveredAt: d.discoveredAt || d.createdAt || d.updatedAt || new Date().toISOString(),
     }));
