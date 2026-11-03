@@ -100,8 +100,63 @@ CATEGORY_KEYWORDS: Dict[str, Dict[str, Any]] = {
 }
 
 PHONE_REGEX = re.compile(
-    r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,5}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,5}"
+    r"(?:\+?91[\s.-]?)?[6-9]\d{4}[\s.-]?\d{5}\b|(?:\+?91[\s.-]?)?[6-9]\d{3}[\s.-]?\d{6}\b|(?:\+?\d{1,3}[-.\s]?)?\(?\d{2,5}\)?[-.\s]?\d{3,5}[-.\s]?\d{3,5}\b"
 )
+
+DUMMY_PHONE_SEQUENCES = {
+    "1234567890", "0123456789", "0000000000", "1111111111",
+    "9999999999", "8888888888", "7777777777", "1800000000",
+    "9876543210", "00000000", "12345678", "01234567"
+}
+
+
+def clean_and_normalize_phone(raw: str) -> Optional[str]:
+    """
+    Cleans, validates, and canonicalizes telephone numbers:
+    - Rejects postal pin codes (6 digits, e.g. 382330), years (4 digits)
+    - Rejects placeholder dummy numbers (1234567890)
+    - Formats Indian mobile numbers: +91 XXXXX XXXXX or +91 XXXX XXXXXX
+    - Formats international numbers with +{country_code}
+    """
+    if not raw or not isinstance(raw, str):
+        return None
+
+    raw_clean = raw.strip().split("?")[0].strip()
+    digits = re.sub(r"\D", "", raw_clean)
+
+    # Validate digit count
+    if len(digits) < 8 or len(digits) > 14:
+        return None
+
+    # Reject pin codes (6 digits) or years (4 digits)
+    if len(digits) in (4, 6):
+        return None
+
+    # Reject dummy sequences
+    if digits in DUMMY_PHONE_SEQUENCES:
+        return None
+
+    # Check for repeating identical digits
+    if len(set(digits)) <= 2:
+        return None
+
+    # Indian Mobile / Landline formatting
+    if len(digits) == 12 and digits.startswith("91") and digits[2] in "6789":
+        d = digits[2:]
+        if " " in raw_clean and len(raw_clean.split()[0].replace("+91", "")) == 4:
+            return f"+91 {d[:4]} {d[4:]}"
+        return f"+91 {d[:5]} {d[5:]}"
+    elif len(digits) == 10 and digits[0] in "6789":
+        return f"+91 {digits[:5]} {digits[5:]}"
+    elif len(digits) == 11 and digits.startswith("0") and digits[1] in "6789":
+        d = digits[1:]
+        return f"+91 {d[:5]} {d[5:]}"
+    elif raw_clean.startswith("+"):
+        return f"+{digits}"
+    elif len(digits) == 10 and digits.startswith("1800"):
+        return f"1800 {digits[4:7]} {digits[7:]}"
+
+    return f"+{digits}" if raw_clean.startswith("+") else digits
 
 CURRENCY_PATTERNS = [
     (r"₹|\bINR\b|Rs\.?", "INR (₹)"),
@@ -244,30 +299,56 @@ def classify_website_content(soup_or_html: Any, raw_html: str = "", url: str = "
     if "bootstrap" in raw_html.lower():
         technologies.append("Bootstrap")
 
-    # 4. Verified Phone Numbers (From tel: links and visible contact text)
-    phones_set = set()
-    # Explicit tel: links (highest fidelity)
+    # 4. Verified Phone Numbers (Ranked by Authority & Priority)
+    phone_candidates: Dict[str, int] = {}
+
+    # Tier 1: Explicit Click-to-Call tel: links & WhatsApp links (Highest Priority = 100)
     for a in soup.find_all("a", href=True):
         href = a["href"].strip()
         if href.lower().startswith("tel:"):
             clean_phone = href[4:].split("?")[0].strip()
-            # Clean non-digit characters except +
-            sanitized = re.sub(r"[^\d+]", " ", clean_phone).strip()
-            digit_count = len(re.sub(r"\D", "", sanitized))
-            if 8 <= digit_count <= 14:
-                phones_set.add(clean_phone)
+            norm = clean_and_normalize_phone(clean_phone)
+            if norm:
+                phone_candidates[norm] = max(phone_candidates.get(norm, 0), 100)
+        elif "wa.me/" in href or "whatsapp.com/send" in href:
+            m = re.search(r"(?:wa\.me/|phone=)(\d+)", href)
+            if m:
+                norm = clean_and_normalize_phone(m.group(1))
+                if norm:
+                    phone_candidates[norm] = max(phone_candidates.get(norm, 0), 95)
 
-    # Clean text phone extraction
-    for elem in soup.find_all(["footer", "header", "address", "section", "p"]):
+    # Tier 2: Dedicated Contact Zones: header, footer, address, [class*="contact"], [id*="contact"] (Priority = 80)
+    semantic_phone_containers = soup.find_all(
+        lambda t: t.name in ["header", "footer", "address"]
+        or any("contact" in str(c).lower() for c in (t.get("class") or []))
+        or "contact" in str(t.get("id", "")).lower()
+        or any("phone" in str(c).lower() for c in (t.get("class") or []))
+    )
+    for container in semantic_phone_containers:
+        c_text = container.get_text(separator=" ")
+        for match in PHONE_REGEX.finditer(c_text):
+            norm = clean_and_normalize_phone(match.group(0))
+            if norm:
+                phone_candidates[norm] = max(phone_candidates.get(norm, 0), 80)
+
+    # Tier 3: Body text mentions (Priority = 30)
+    body = soup.find("body") or soup
+    for elem in body.find_all(["p", "span", "div", "li"]):
+        if elem.name in ("script", "style", "noscript", "svg", "input"):
+            continue
         elem_text = elem.get_text()
-        if any(term in elem_text.lower() for term in ["phone", "call", "tel", "contact", "+91", "1800"]):
+        if any(term in elem_text.lower() for term in ["phone", "call", "tel", "contact", "+91", "1800", "mobile"]):
             for match in PHONE_REGEX.finditer(elem_text):
-                cand = match.group(0).strip()
-                digit_count = len(re.sub(r"\D", "", cand))
-                if 10 <= digit_count <= 13:
-                    phones_set.add(cand)
+                norm = clean_and_normalize_phone(match.group(0))
+                if norm:
+                    phone_candidates[norm] = max(phone_candidates.get(norm, 0), 30)
 
-    valid_phones = sorted(list(phones_set))[:4]
+    # Sort strictly by priority score descending (Official tel: links ALWAYS at index 0)
+    valid_phones = sorted(
+        phone_candidates.keys(),
+        key=lambda p: phone_candidates[p],
+        reverse=True
+    )[:4]
 
     # Clean summary (1-2 sentences)
     summary = meta_desc if meta_desc else (title if title else "")

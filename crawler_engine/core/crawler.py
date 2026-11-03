@@ -524,6 +524,13 @@ class WebCrawler:
                         logger.info(f"  [Tech Stack] Detected: {', '.join(intel['technologies'])}")
                     if intel["phones"]:
                         logger.info(f"  [Contact Phones] Detected: {', '.join(intel['phones'])}")
+                elif is_contact_target:
+                    contact_intel = classify_website_content(soup, raw_html=html, url=current_url)
+                    if contact_intel.get("phones"):
+                        existing_phones = self.site_intelligence.get("phones", [])
+                        merged = contact_intel["phones"] + [p for p in existing_phones if p not in contact_intel["phones"]]
+                        self.site_intelligence["phones"] = merged[:4]
+                        logger.info(f"  [Contact Phones Updated] {', '.join(self.site_intelligence['phones'])}")
 
                 # Track visited page record
                 self.visited_records.append({

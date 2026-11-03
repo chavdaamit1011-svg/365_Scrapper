@@ -843,23 +843,45 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
                                   <Phone size={12} color="#0284c7" />
                                   <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-main)' }}>Contact Phone:</span>
-                                  {r.phones.map((phone) => (
-                                    <a
-                                      key={phone}
-                                      href={`tel:${phone}`}
-                                      style={{
-                                        fontSize: '11px',
-                                        fontWeight: 600,
-                                        color: '#0284c7',
-                                        textDecoration: 'none',
-                                        background: '#e0f2fe',
-                                        padding: '1px 6px',
-                                        borderRadius: '4px',
-                                      }}
-                                    >
-                                      {phone}
-                                    </a>
-                                  ))}
+                                  {r.phones.map((phone, pIdx) => {
+                                    const isPrimaryPhone = pIdx === 0;
+                                    return (
+                                      <a
+                                        key={phone}
+                                        href={`tel:${phone.replace(/\s+/g, '')}`}
+                                        style={{
+                                          fontSize: '11px',
+                                          fontWeight: 600,
+                                          color: isPrimaryPhone ? '#065f46' : '#0369a1',
+                                          textDecoration: 'none',
+                                          background: isPrimaryPhone ? '#ecfdf5' : '#e0f2fe',
+                                          border: `1px solid ${isPrimaryPhone ? '#a7f3d0' : '#bae6fd'}`,
+                                          padding: '2px 8px',
+                                          borderRadius: '4px',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                        }}
+                                        title={isPrimaryPhone ? 'Primary Contact Phone' : 'Alternate Contact Phone'}
+                                      >
+                                        <span>{phone}</span>
+                                        {isPrimaryPhone && (
+                                          <span
+                                            style={{
+                                              fontSize: '9.5px',
+                                              background: '#059669',
+                                              color: '#fff',
+                                              padding: '1px 5px',
+                                              borderRadius: '3px',
+                                              fontWeight: 700,
+                                            }}
+                                          >
+                                            Primary
+                                          </span>
+                                        )}
+                                      </a>
+                                    );
+                                  })}
                                 </div>
                               )}
                             </div>
