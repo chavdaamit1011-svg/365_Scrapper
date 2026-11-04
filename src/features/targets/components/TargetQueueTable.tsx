@@ -217,6 +217,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
               <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', color: 'var(--text-muted)' }}>
                 <th style={{ padding: '12px 16px', fontWeight: 600, width: '50px' }}>#</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600 }}>Target Domain / Subdomain</th>
+                <th style={{ padding: '12px 16px', fontWeight: 600 }}>Queue Status</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600 }}>Scope Type</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600 }}>Ingestion Source</th>
                 <th style={{ padding: '12px 16px', fontWeight: 600 }}>Added At</th>
@@ -226,7 +227,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} style={{ padding: '40px 18px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                  <td colSpan={7} style={{ padding: '40px 18px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     {targets.length === 0
                       ? 'No targets ingested yet. Enter domains manually or upload a CSV / Excel file above.'
                       : 'No loaded targets match your search.'}
@@ -269,6 +270,44 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                           {copiedId === t.id ? <Check size={13} /> : <Copy size={13} />}
                         </button>
                       </div>
+                    </td>
+
+                    {/* Queue Status */}
+                    <td style={{ padding: '12px 16px' }}>
+                      {isCrawling ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '2px 8px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: idx === 0 ? '#fef3c7' : '#f1f5f9',
+                            color: idx === 0 ? '#b45309' : '#64748b',
+                            border: `1px solid ${idx === 0 ? '#fde68a' : '#e2e8f0'}`,
+                          }}
+                        >
+                          {idx === 0 ? 'QUEUED (#1) • NEXT IN QUEUE' : `QUEUED (#${idx + 1}) • IN QUEUE`}
+                        </span>
+                      ) : (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            padding: '2px 8px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            background: '#f1f5f9',
+                            color: '#64748b',
+                            border: '1px solid #e2e8f0',
+                          }}
+                        >
+                          READY
+                        </span>
+                      )}
                     </td>
 
                     <td style={{ padding: '12px 16px' }}>

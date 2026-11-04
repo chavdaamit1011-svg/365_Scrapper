@@ -9,7 +9,7 @@
 
 import crypto from 'crypto';
 import { connectMongo } from '../../mongodb';
-import { ScrapedDomainRecord, ReconciliationStats } from '../types';
+import { ScrapedDomainRecord, ReconciliationStats, SubdomainItemDetail } from '../types';
 
 export function generateEntityId(entityType: 'domain' | 'subdomain' | 'email', value: string): string {
   const norm = value.trim().toLowerCase();
@@ -52,20 +52,34 @@ export async function reconcileAndStoreResult(
     stats.domain_action = 'NEW';
   }
 
-  // 2. Subdomains Diff & Upsert
+  // 2. Subdomains Diff, Lifecycle Tracking & Upsert
   const existingSubDocs = await db.collection('master_subdomains').find({ domain_id: domainId }).toArray();
-  const existingSubMap = new Map(existingSubDocs.map((s: any) => [s.subdomain, s]));
-  const crawledSubSet = new Set(record.subdomains);
+  const existingSubMap = new Map<string, any>(existingSubDocs.map((s: any) => [(s.subdomain || '').toLowerCase().trim(), s]));
+  const crawledSubLowerSet = new Set<string>((record.subdomains || []).map((s) => s.toLowerCase().trim()));
+  const subdomainDetails: SubdomainItemDetail[] = [];
 
-  for (const sub of record.subdomains) {
-    const subId = generateEntityId('subdomain', sub);
-    if (!existingSubMap.has(sub)) {
+  // A. Process Crawled Subdomains (NEW or ACTIVE)
+  for (const sub of record.subdomains || []) {
+    const subClean = sub.trim();
+    const subLower = subClean.toLowerCase();
+    const subId = generateEntityId('subdomain', subClean);
+    const existing = existingSubMap.get(subLower);
+
+    if (!existing) {
+      // Discovered New Subdomain in this cycle
       stats.new_subdomains++;
       stats.audit_changes_recorded++;
+      subdomainDetails.push({
+        subdomain: subClean,
+        status: 'NEW',
+        firstSeen: nowIso,
+        lastSeen: nowIso,
+      });
+
       await db.collection('master_subdomains').updateOne(
         { id: subId },
         {
-          $set: { domain_id: domainId, domain: record.domain, subdomain: sub, status: 'ACTIVE', last_seen: nowIso },
+          $set: { domain_id: domainId, domain: record.domain, subdomain: subClean, status: 'ACTIVE', last_seen: nowIso },
           $setOnInsert: { first_seen: nowIso },
         },
         { upsert: true }
@@ -76,17 +90,74 @@ export async function reconcileAndStoreResult(
         entity_type: 'subdomain',
         entity_id: subId,
         change_type: 'NEW',
-        new_value: sub,
+        new_value: subClean,
         detected_at: nowIso,
       });
     } else {
+      // Previously existing subdomain
+      const wasRemoved = existing.status === 'REMOVED';
       stats.existing_subdomains++;
+      subdomainDetails.push({
+        subdomain: subClean,
+        status: wasRemoved ? 'NEW' : 'ACTIVE',
+        firstSeen: existing.first_seen || nowIso,
+        lastSeen: nowIso,
+      });
+
       await db.collection('master_subdomains').updateOne(
         { id: subId },
         { $set: { status: 'ACTIVE', last_seen: nowIso } }
       );
+
+      if (wasRemoved) {
+        await db.collection('data_changes').insertOne({
+          domain_id: domainId,
+          domain: record.domain,
+          entity_type: 'subdomain',
+          entity_id: subId,
+          change_type: 'REACTIVATED',
+          new_value: subClean,
+          detected_at: nowIso,
+        });
+      }
     }
   }
+
+  // B. Detect Missing/Removed Subdomains (existed previously, but not found in current crawl cycle)
+  for (const [subKey, existingDoc] of existingSubMap.entries()) {
+    if (!crawledSubLowerSet.has(subKey)) {
+      stats.missing_subdomains++;
+      stats.audit_changes_recorded++;
+
+      subdomainDetails.push({
+        subdomain: existingDoc.subdomain,
+        status: 'REMOVED',
+        firstSeen: existingDoc.first_seen,
+        lastSeen: existingDoc.last_seen,
+      });
+
+      await db.collection('master_subdomains').updateOne(
+        { id: existingDoc.id },
+        { $set: { status: 'REMOVED', last_checked: nowIso } }
+      );
+
+      await db.collection('data_changes').insertOne({
+        domain_id: domainId,
+        domain: record.domain,
+        entity_type: 'subdomain',
+        entity_id: existingDoc.id,
+        change_type: 'REMOVED',
+        old_value: existingDoc.subdomain,
+        detected_at: nowIso,
+      });
+    }
+  }
+
+  // Deduplicate all subdomains in memory
+  const allSubdomainNames = Array.from(new Set([
+    ...(record.subdomains || []),
+    ...existingSubDocs.map((s: any) => s.subdomain)
+  ]));
 
   // 3. Emails Diff & Upsert
   const existingEmailDocs = await db.collection('master_emails').find({ domain_id: domainId }).toArray();
@@ -146,16 +217,21 @@ export async function reconcileAndStoreResult(
     { upsert: true }
   );
 
-  // 5. Sync to primary dashboard collection: scraped_results
+  // 5. Sync to primary dashboard collection: scraped_results (Zero duplicate subdomains)
   await db.collection('scraped_results').updateOne(
-    { id: record.id },
+    { domain: record.domain },
     {
       $set: {
         ...record,
+        subdomains: allSubdomainNames,
+        subdomainCount: allSubdomainNames.length,
+        subdomainDetails,
         reconciliation: stats,
         updatedAt: nowIso,
       },
       $setOnInsert: {
+        id: record.id,
+        domain: record.domain,
         createdAt: nowIso,
       },
     },

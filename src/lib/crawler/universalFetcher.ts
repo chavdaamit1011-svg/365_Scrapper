@@ -11,6 +11,7 @@
 
 import http from 'http';
 import https from 'https';
+import zlib from 'zlib';
 import { URL } from 'url';
 import { FetchResult } from './types';
 
@@ -18,12 +19,12 @@ import { FetchResult } from './types';
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
   keepAlive: true,
-  timeout: 10000,
+  timeout: 12000,
 });
 
 const httpAgent = new http.Agent({
   keepAlive: true,
-  timeout: 10000,
+  timeout: 12000,
 });
 
 const DEFAULT_HEADERS = {
@@ -79,7 +80,29 @@ export function requestOnce(
 
         res.on('end', () => {
           const bodyBuffer = Buffer.concat(chunks);
-          const body = bodyBuffer.toString('utf-8');
+          const encoding = (res.headers['content-encoding'] || '').toLowerCase().trim();
+          let decompressed: Buffer = bodyBuffer;
+
+          try {
+            if (
+              encoding === 'gzip' ||
+              (bodyBuffer.length > 2 && bodyBuffer[0] === 0x1f && bodyBuffer[1] === 0x8b)
+            ) {
+              decompressed = zlib.gunzipSync(bodyBuffer);
+            } else if (encoding === 'deflate') {
+              try {
+                decompressed = zlib.inflateSync(bodyBuffer);
+              } catch {
+                decompressed = zlib.inflateRawSync(bodyBuffer);
+              }
+            } else if (encoding === 'br') {
+              decompressed = zlib.brotliDecompressSync(bodyBuffer);
+            }
+          } catch (decErr) {
+            // If decompression fails, gracefully fall back to raw buffer string
+          }
+
+          const body = decompressed.toString('utf-8');
           resolve({
             statusCode: res.statusCode || 200,
             finalUrl: rawUrl,

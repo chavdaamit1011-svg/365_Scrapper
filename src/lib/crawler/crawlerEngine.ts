@@ -156,35 +156,66 @@ export async function crawlDomain(
   let siteIntel = classifySite('', startingHost);
 
   if (!rootFetchResult.ok) {
-    // Site is offline or unreachable on root URL (e.g. gov.in which has no root web server)
-    console.log(`[CrawlerEngine] Root URL unreachable (${rootFetchResult.errorCode}): ${rootFetchResult.error}`);
+    if (allSubdomains.size > 0) {
+      // Apex host has no web server (e.g. gov.in, registry scope), BUT active subdomains were verified!
+      console.log(`[CrawlerEngine] Apex has no web server (${rootFetchResult.errorCode}), but discovered ${allSubdomains.size} active subdomains! Classifying as DOMAIN_SCOPE.`);
+      finalStatus = 'RESOLVED';
+      errorCode = null;
+      errorTitle = null;
 
-    finalStatus = rootFetchResult.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : 'TIMED_OUT';
-    errorCode = rootFetchResult.errorCode || 'ERR_CONNECTION_TIMED_OUT';
-    errorTitle = rootFetchResult.errorTitle || 'Connection Timed Out';
+      const scopeTitle = `${startingHost.toUpperCase()} Public Domain Scope`;
+      const scopeSummary = `Apex host has no direct web server, but ${allSubdomains.size} live subdomains were discovered and mapped in this scope.`;
 
-    const errorSummary = `Target website server took too long to respond (${errorCode}). Server did not respond within timeout limits.`;
+      visitedRecords.push({
+        url: startUrl,
+        title: scopeTitle,
+        statusCode: 200,
+        depth: 0,
+        timestamp: new Date().toISOString(),
+      });
 
-    visitedRecords.push({
-      url: startUrl,
-      title: errorTitle,
-      statusCode: rootFetchResult.status || 504,
-      depth: 0,
-      errorCode,
-      timestamp: new Date().toISOString(),
-    });
+      siteIntel = {
+        title: scopeTitle,
+        metaDescription: scopeSummary,
+        category: 'Public Domain Scope',
+        categoryIcon: '🏛️',
+        summary: scopeSummary,
+        technologies: ['DNS Subdomain Registry'],
+        isEcommerce: false,
+        ecommerceSignals: [],
+        phones: [],
+      };
+    } else {
+      // Site is truly offline or unreachable on root URL with 0 subdomains
+      console.log(`[CrawlerEngine] Root URL unreachable (${rootFetchResult.errorCode}): ${rootFetchResult.error}`);
 
-    siteIntel = {
-      title: errorTitle,
-      metaDescription: '',
-      category: errorTitle,
-      categoryIcon: '⚠️',
-      summary: errorSummary,
-      technologies: [],
-      isEcommerce: false,
-      ecommerceSignals: [],
-      phones: [],
-    };
+      finalStatus = rootFetchResult.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : 'TIMED_OUT';
+      errorCode = rootFetchResult.errorCode || 'ERR_CONNECTION_TIMED_OUT';
+      errorTitle = rootFetchResult.errorTitle || 'Connection Timed Out';
+
+      const errorSummary = `Target website server took too long to respond (${errorCode}). Server did not respond within timeout limits.`;
+
+      visitedRecords.push({
+        url: startUrl,
+        title: errorTitle,
+        statusCode: rootFetchResult.status || 504,
+        depth: 0,
+        errorCode,
+        timestamp: new Date().toISOString(),
+      });
+
+      siteIntel = {
+        title: errorTitle,
+        metaDescription: '',
+        category: errorTitle,
+        categoryIcon: '⚠️',
+        summary: errorSummary,
+        technologies: [],
+        isEcommerce: false,
+        ecommerceSignals: [],
+        phones: [],
+      };
+    }
   } else {
     // Root URL is live! Extract metadata & crawl pages
     console.log(`[CrawlerEngine] Successfully connected to ${startUrl} (HTTP ${rootFetchResult.status})`);

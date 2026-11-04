@@ -45,6 +45,13 @@ export interface ReconciliationStats {
   audit_changes_recorded: number;
 }
 
+export interface SubdomainItemDetail {
+  subdomain: string;
+  status: 'NEW' | 'ACTIVE' | 'REMOVED';
+  firstSeen?: string;
+  lastSeen?: string;
+}
+
 export interface ScrapedDataRecord {
   id: string;
   targetId?: string;
@@ -52,6 +59,7 @@ export interface ScrapedDataRecord {
   rootDomain?: string;
   subdomain: string;
   subdomains?: string[];
+  subdomainDetails?: SubdomainItemDetail[];
   subdomainCount?: number;
   email: string;
   emails?: string[];
@@ -94,5 +102,7 @@ export interface CrawlerStats {
   databaseTotalSubdomains?: number;
   databaseTotalEmails?: number;
   databaseTotalCountries?: number;
+  cycleCount?: number;
+  isContinuous?: boolean;
 }
 

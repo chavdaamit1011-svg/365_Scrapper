@@ -13,6 +13,7 @@ interface TargetInputCardProps {
   existingTargets: TargetItem[];
   onAddAndStart?: (targets: TargetItem[]) => void;
   onOpenBulkModal?: () => void;
+  isCrawling?: boolean;
 }
 
 export const TargetInputCard: React.FC<TargetInputCardProps> = ({
@@ -20,6 +21,7 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
   existingTargets,
   onAddAndStart,
   onOpenBulkModal,
+  isCrawling = false,
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -84,10 +86,16 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
 
     onAddTargets(items);
     setInputVal('');
-    setSuccess(
-      `Added ${items.length} target${items.length > 1 ? 's' : ''} to search queue.`
-    );
-    setTimeout(() => setSuccess(null), 3000);
+    if (isCrawling) {
+      setSuccess(
+        `Added ${items.length} target${items.length > 1 ? 's' : ''} to queue. Will crawl automatically next!`
+      );
+    } else {
+      setSuccess(
+        `Added ${items.length} target${items.length > 1 ? 's' : ''}! Automatically starting crawler...`
+      );
+    }
+    setTimeout(() => setSuccess(null), 3500);
   };
 
   const handleAddAndStart = () => {
@@ -95,6 +103,17 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
     if (!items) return;
 
     setInputVal('');
+    if (isCrawling) {
+      setSuccess(
+        `Crawl in progress: Added ${items.length} target${items.length > 1 ? 's' : ''} to queue!`
+      );
+    } else {
+      setSuccess(
+        `Added ${items.length} target${items.length > 1 ? 's' : ''}! Automatically starting crawler...`
+      );
+    }
+    setTimeout(() => setSuccess(null), 3500);
+
     if (onAddAndStart) {
       onAddAndStart(items);
     } else {

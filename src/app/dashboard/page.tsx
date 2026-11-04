@@ -104,24 +104,7 @@ export default function DashboardPage() {
     }
   }, [crawler.status]);
 
-  // Automatically purge any targets that have already been scraped from the pending queue
-  useEffect(() => {
-    if (crawler.scrapedResults.length > 0) {
-      const completedDomains = new Set(
-        crawler.scrapedResults.map((r) => r.domain.toLowerCase().trim())
-      );
-      setTargets((prev) => {
-        const pendingOnly = prev.filter((t) => !completedDomains.has(t.domain.toLowerCase().trim()));
-        if (pendingOnly.length !== prev.length) {
-          try {
-            localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(pendingOnly));
-          } catch (e) {}
-          return pendingOnly;
-        }
-        return prev;
-      });
-    }
-  }, [crawler.scrapedResults]);
+  // Ingested targets in queue are preserved until picked up or removed by user
 
   const fetchUsers = async () => {
     try {
@@ -168,11 +151,9 @@ export default function DashboardPage() {
     }
   };
 
-  // Target Ingestion Handlers
+  // Target Ingestion Handlers - Autonomous Queue & Auto-Start Manager
   const handleAddTargets = (newItems: TargetItem[]) => {
-    const completedDomains = new Set(
-      crawler.scrapedResults.map((r) => r.domain.toLowerCase().trim())
-    );
+    if (!newItems || newItems.length === 0) return;
 
     setTargets((prev) => {
       const existingIds = new Set(prev.map((p) => p.id));
@@ -180,34 +161,34 @@ export default function DashboardPage() {
       const uniqueNew = newItems.filter(
         (item) =>
           !existingIds.has(item.id) &&
-          !existingDomains.has(item.domain.toLowerCase()) &&
-          !completedDomains.has(item.domain.toLowerCase().trim())
+          !existingDomains.has(item.domain.toLowerCase())
       );
       if (uniqueNew.length === 0) return prev;
-      const updated = [...uniqueNew, ...prev];
+
+      // FIFO Queue: Append new targets to the END of the queue
+      const updated = [...prev, ...uniqueNew];
       try {
         localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
       } catch (e) {}
+
+      // Autonomous Crawl Decision:
+      // 1. If crawler is IDLE / COMPLETED / CANCELLED -> AUTO-START IMMEDIATELY!
+      if (crawler.status !== 'RUNNING' && crawler.status !== 'PAUSED') {
+        setTimeout(() => {
+          crawler.startCrawler(updated);
+        }, 80);
+      } else {
+        // 2. If crawler is ALREADY RUNNING -> Enqueue into the active execution pipeline
+        crawler.enqueueTargets(uniqueNew);
+      }
+
       return updated;
     });
   };
 
   const handleAddAndStart = (newItems: TargetItem[]) => {
-    if (crawler.status === 'RUNNING' || crawler.status === 'PAUSED') {
-      // Crawler is already working on another domain: append new target(s) to the pending Queue
-      handleAddTargets(newItems);
-      return;
-    }
-
-    // Crawler is IDLE: only queue the new item(s) to be crawled right now (do not keep old completed targets)
-    setTargets(newItems);
-    try {
-      localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(newItems));
-    } catch (e) {}
-
-    setTimeout(() => {
-      crawler.startCrawler();
-    }, 120);
+    // Follows the same autonomous auto-start FIFO queue behavior
+    handleAddTargets(newItems);
   };
 
   const handleRemoveTarget = (id: string) => {
@@ -351,6 +332,7 @@ export default function DashboardPage() {
               existingTargets={targets}
               onAddAndStart={handleAddAndStart}
               onOpenBulkModal={() => setIsBulkModalOpen(true)}
+              isCrawling={isScrapingActive}
             />
 
             {/* Bulk Upload Modal Dialog */}
@@ -505,7 +487,7 @@ export default function DashboardPage() {
                   <Button
                     variant="primary"
                     size="sm"
-                    onClick={crawler.startCrawler}
+                    onClick={() => crawler.startCrawler()}
                     disabled={targets.length === 0}
                     leftIcon={<Play size={14} fill="currentColor" />}
                   >
@@ -530,7 +512,7 @@ export default function DashboardPage() {
                 targets={targets}
                 onRemoveTarget={handleRemoveTarget}
                 onClearAll={handleClearTargets}
-                onStartCrawler={crawler.startCrawler}
+                onStartCrawler={() => crawler.startCrawler()}
                 isCrawling={isScrapingActive}
               />
             )}

@@ -76,7 +76,9 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 animation: 'pulse 1.2s infinite ease-in-out',
               }}
             />
-            CRAWLING IN PROGRESS
+            {stats.cycleCount && stats.cycleCount > 1
+              ? `LIVE CONTINUOUS RECON (CYCLE #${stats.cycleCount})`
+              : 'CONTINUOUS CRAWLING ACTIVE'}
           </span>
         );
       case 'PAUSED':
@@ -242,8 +244,9 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
               onClick={onPause}
               leftIcon={<Pause size={14} fill="currentColor" />}
               style={{ borderColor: '#fde68a', color: '#92400e', background: '#fffbeb' }}
+              title="Pause active crawl (queue domains remain waiting)"
             >
-              Stop / Pause
+              Pause Crawler
             </Button>
           )}
 
@@ -254,6 +257,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
               size="sm"
               onClick={onResume}
               leftIcon={<RotateCcw size={14} />}
+              title="Resume crawling active domain"
             >
               Resume Crawler
             </Button>
@@ -266,8 +270,9 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
               size="sm"
               onClick={onCancel}
               leftIcon={<Ban size={14} />}
+              title={hasTargets ? 'Cancel current domain and crawl next domain from queue' : 'Cancel active crawl'}
             >
-              Cancel Crawl
+              {hasTargets ? 'Cancel & Next Domain' : 'Cancel Crawl'}
             </Button>
           )}
 

@@ -29,6 +29,10 @@ export function useCrawlerController(
     emails: number;
   } | null>(null);
 
+  const [isContinuousMode, setIsContinuousMode] = useState<boolean>(true);
+  const [cycleCount, setCycleCount] = useState<number>(1);
+  const activeTargetRef = useRef<TargetItem | null>(null);
+
   const targetsRef = useRef<TargetItem[]>(targets);
   useEffect(() => {
     targetsRef.current = targets;
@@ -117,156 +121,144 @@ export function useCrawlerController(
     };
   }, [status]);
 
-  // Process targets in the pending queue
-  const runCrawlerQueue = useCallback(async () => {
-    if (targetsRef.current.length === 0) {
-      setStatus('COMPLETED');
-      setCurrentTargetName(null);
-      return;
-    }
+  // Single active target execution loop with continuous monitoring
+  const runTargetLoop = useCallback(
+    async (target: TargetItem) => {
+      activeTargetRef.current = target;
+      setCurrentTargetName(target.domain);
+      setStatus('RUNNING');
+      isCancelledRef.current = false;
+      isPausedRef.current = false;
 
-    isCancelledRef.current = false;
-    isPausedRef.current = false;
-    setStatus('RUNNING');
+      let currentCycle = 1;
 
-    // Record session batch total if not set
-    const initialBatchCount = targetsRef.current.length;
-    setSessionTotal((prev) => (prev > 0 ? prev : initialBatchCount));
-
-    while (targetsRef.current.length > 0) {
-      if (isCancelledRef.current) {
-        setStatus('CANCELLED');
-        setCurrentTargetName(null);
-        setActivePhase('Crawl Cancelled');
-        return;
-      }
-
-      if (isPausedRef.current) {
-        setStatus('PAUSED');
-        setActivePhase('Crawler Paused');
-        return;
-      }
-
-      const currentTarget = targetsRef.current[0];
-      setCurrentTargetName(currentTarget.domain);
-      setActivePhase('OSINT Recon & Certificate Discovery');
-      setTargetSubProgress(20);
-      setActiveTargetResult(null);
-
-      // Simulated phases for smooth live telemetry while backend executes
-      const phaseTimer1 = setTimeout(() => {
-        if (!isCancelledRef.current && !isPausedRef.current) {
-          setActivePhase('Deep Web Crawling & Link Traversal');
-          setTargetSubProgress(55);
+      while (!isCancelledRef.current) {
+        if (isPausedRef.current) {
+          setStatus('PAUSED');
+          setActivePhase('Crawler Paused');
+          return;
         }
-      }, 2500);
 
-      const phaseTimer2 = setTimeout(() => {
-        if (!isCancelledRef.current && !isPausedRef.current) {
-          setActivePhase('Data Validation & MongoDB Sync');
-          setTargetSubProgress(85);
-        }
-      }, 7000);
+        setCycleCount(currentCycle);
+        setActivePhase(`[Cycle #${currentCycle}] Reconnaissance & Subdomain Discovery for ${target.domain}`);
+        setTargetSubProgress(20);
+        setActiveTargetResult(null);
 
-      const interactiveMaxPages = 25;
-      const interactiveMaxDepth = 3;
-
-      try {
-        // Enqueue job via Redis API route /api/crawl-jobs (Component 1 of PDF)
-        const jobRes = await fetch('/api/crawl-jobs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            domain: currentTarget.domain,
-            max_pages: interactiveMaxPages,
-            max_depth: interactiveMaxDepth,
-            requests_per_second: 1,
-            respect_robots_txt: true,
-          }),
-        });
-
-        const jobJson = await jobRes.json();
-        const jobId = jobJson.job_id;
-
-        // Poll Redis job status until completed or generous timeout
-        let isDone = false;
-        let pollAttempts = 0;
-        const maxPollAttempts = 120; // Up to 96 seconds maximum
-
-        while (!isDone && pollAttempts < maxPollAttempts && !isCancelledRef.current && !isPausedRef.current) {
-          await new Promise((r) => setTimeout(r, 800));
-          pollAttempts++;
-
-          if (jobId) {
-            try {
-              const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
-              const statusJson = await statusRes.json();
-              if (statusJson.success && statusJson.job) {
-                const j = statusJson.job;
-                if (j.status === 'completed' || j.status === 'failed') {
-                  isDone = true;
-                }
-
-                // Live Redis telemetry to UI cards
-                if (typeof j.subdomainsCount === 'number' || typeof j.emailsCount === 'number') {
-                  setActiveTargetResult({
-                    subdomains: j.subdomainsCount || 0,
-                    emails: j.emailsCount || 0,
-                  });
-                }
-                if (j.pagesCrawled && j.pagesCrawled > 0) {
-                  setActivePhase(`Deep Crawling: Page ${j.pagesCrawled}/${interactiveMaxPages}`);
-                  setTargetSubProgress(Math.min(95, Math.round((j.pagesCrawled / interactiveMaxPages) * 70) + 25));
-                }
-              }
-            } catch {}
+        // Simulated phases for smooth live telemetry
+        const phaseTimer1 = setTimeout(() => {
+          if (!isCancelledRef.current && !isPausedRef.current) {
+            setActivePhase(`[Cycle #${currentCycle}] Deep Web Crawling & Link Traversal for ${target.domain}`);
+            setTargetSubProgress(55);
           }
+        }, 2500);
 
-          // Live database streaming: sync table every 3 polls (~2.4s) so new domains pop up immediately!
-          if (pollAttempts % 3 === 0) {
-            try {
-              const liveRes = await fetch('/api/crawler/results');
-              const liveJson = await liveRes.json();
-              if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
-                setScrapedResults(liveJson.data);
-              }
-            } catch {}
+        const phaseTimer2 = setTimeout(() => {
+          if (!isCancelledRef.current && !isPausedRef.current) {
+            setActivePhase(`[Cycle #${currentCycle}] Delta Validation & MongoDB Sync`);
+            setTargetSubProgress(85);
           }
+        }, 7000);
+
+        const interactiveMaxPages = 25;
+        const interactiveMaxDepth = 3;
+
+        try {
+          // Enqueue job via Redis API route /api/crawl-jobs
+          const jobRes = await fetch('/api/crawl-jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              domain: target.domain,
+              max_pages: interactiveMaxPages,
+              max_depth: interactiveMaxDepth,
+              requests_per_second: 1,
+              respect_robots_txt: true,
+            }),
+          });
+
+          const jobJson = await jobRes.json();
+          const jobId = jobJson.job_id;
+
+          // Poll Redis job status until completed or generous timeout
+          let isDone = false;
+          let pollAttempts = 0;
+          const maxPollAttempts = 120; // Up to 96 seconds maximum
+
+          while (!isDone && pollAttempts < maxPollAttempts && !isCancelledRef.current && !isPausedRef.current) {
+            await new Promise((r) => setTimeout(r, 800));
+            pollAttempts++;
+
+            if (jobId) {
+              try {
+                const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
+                const statusJson = await statusRes.json();
+                if (statusJson.success && statusJson.job) {
+                  const j = statusJson.job;
+                  if (j.status === 'completed' || j.status === 'failed') {
+                    isDone = true;
+                  }
+
+                  // Live Redis telemetry to UI cards
+                  if (typeof j.subdomainsCount === 'number' || typeof j.emailsCount === 'number') {
+                    setActiveTargetResult({
+                      subdomains: j.subdomainsCount || 0,
+                      emails: j.emailsCount || 0,
+                    });
+                  }
+                  if (j.pagesCrawled && j.pagesCrawled > 0) {
+                    setActivePhase(`[Cycle #${currentCycle}] Crawling Page ${j.pagesCrawled}/${interactiveMaxPages}`);
+                    setTargetSubProgress(Math.min(95, Math.round((j.pagesCrawled / interactiveMaxPages) * 70) + 25));
+                  }
+                }
+              } catch {}
+            }
+
+            // Live database streaming: sync table every 3 polls (~2.4s)
+            if (pollAttempts % 3 === 0) {
+              try {
+                const liveRes = await fetch('/api/crawler/results');
+                const liveJson = await liveRes.json();
+                if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
+                  setScrapedResults(liveJson.data);
+                }
+              } catch {}
+            }
+          }
+        } catch (err) {
+          console.warn(`[Crawler] Network error crawling ${target.domain}:`, err);
+        } finally {
+          clearTimeout(phaseTimer1);
+          clearTimeout(phaseTimer2);
         }
-      } catch (err) {
-        console.warn(`[Crawler] Network error crawling ${currentTarget.domain}:`, err);
-      } finally {
-        clearTimeout(phaseTimer1);
-        clearTimeout(phaseTimer2);
-      }
 
-      setTargetSubProgress(100);
-      setActivePhase('Target Scrape Completed');
+        // If user paused/stopped crawler, immediately freeze and keep target active!
+        if (isPausedRef.current) {
+          setStatus('PAUSED');
+          setActivePhase(`Crawler Stopped / Paused on [${target.domain}]`);
+          return;
+        }
 
-      if (isCancelledRef.current) {
-        setStatus('CANCELLED');
-        setCurrentTargetName(null);
-        return;
-      }
+        if (isCancelledRef.current) {
+          break;
+        }
 
-      // Fetch fresh consolidated state directly from MongoDB with retry
-      let foundTargetInMongo = false;
-      for (let attempt = 0; attempt < 3; attempt++) {
+        setTargetSubProgress(100);
+        setActivePhase(`[Cycle #${currentCycle}] Target Pass Completed for ${target.domain}`);
+
+        // Fetch fresh consolidated state directly from MongoDB
         try {
           const freshRes = await fetch('/api/crawler/results');
           const freshJson = await freshRes.json();
           if (freshJson.success && Array.isArray(freshJson.data) && freshJson.data.length > 0) {
             setScrapedResults(freshJson.data);
 
-            // Find this specific target record to get its exact subdomains and emails
             const matched = freshJson.data.find((r: ScrapedDataRecord) => {
               const d1 = (r.domain || r.rootDomain || '').toLowerCase().trim();
-              const d2 = currentTarget.domain.toLowerCase().trim();
+              const d2 = target.domain.toLowerCase().trim();
               return d1 === d2 || d1.includes(d2) || d2.includes(d1);
             });
 
             if (matched) {
-              foundTargetInMongo = true;
               const subs = Array.isArray(matched.subdomains)
                 ? matched.subdomains.filter((s: string) => s.toLowerCase() !== matched.domain.toLowerCase())
                 : [];
@@ -278,50 +270,129 @@ export function useCrawlerController(
                 subdomains: subs.length,
                 emails: ems.length,
               });
-              break;
             }
           }
         } catch (e) {}
 
-        if (!foundTargetInMongo && attempt < 2) {
-          await new Promise((r) => setTimeout(r, 600));
+        // Increment processed targets count
+        setProcessedTargetsCount((prev) => prev + 1);
+
+        if (isPausedRef.current) {
+          setStatus('PAUSED');
+          setActivePhase(`Crawler Stopped / Paused on [${target.domain}]`);
+          return;
         }
+
+        if (isCancelledRef.current) {
+          break;
+        }
+
+        if (!isContinuousMode) {
+          break;
+        }
+
+        currentCycle++;
+
+        // Cooldown timer (10s) between continuous monitoring passes
+        for (let cd = 10; cd > 0; cd--) {
+          if (isCancelledRef.current || isPausedRef.current) break;
+          setActivePhase(`Live Monitoring: [${target.domain}] active. Next refresh pass (Cycle #${currentCycle}) in ${cd}s...`);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+
+        if (isPausedRef.current) {
+          setStatus('PAUSED');
+          setActivePhase(`Crawler Stopped / Paused on [${target.domain}]`);
+          return;
+        }
+
+        if (isCancelledRef.current) break;
       }
 
-      // Increment processed targets count
-      setProcessedTargetsCount((prev) => prev + 1);
-
-      // Remove the completed target from pending Queue immediately
-      targetsRef.current = targetsRef.current.filter((t) => t.id !== currentTarget.id);
-      if (onTargetCompleted) {
-        onTargetCompleted(currentTarget.id);
-      }
-
-      // Brief delay for state transition
-      await new Promise((r) => setTimeout(r, 300));
-
+      // If user paused/stopped crawler, DO NOT ADVANCE TO NEXT QUEUE ITEM!
       if (isPausedRef.current) {
         setStatus('PAUSED');
+        setActivePhase(`Crawler Stopped / Paused on [${target.domain}]`);
         return;
       }
-    }
 
-    setStatus('COMPLETED');
-    setActivePhase('All Targets Crawled Successfully');
-  }, [onTargetCompleted]);
+      // Target execution stopped (either completed naturally or cancelled by user)
+      const wasCancelled = isCancelledRef.current;
+      activeTargetRef.current = null;
+
+      // ONLY advance to next target if domain finished naturally OR user explicitly cancelled it!
+      if (targetsRef.current.length > 0) {
+        const nextTarget = targetsRef.current[0];
+        const remaining = targetsRef.current.slice(1);
+        targetsRef.current = remaining;
+        if (onTargetCompleted) {
+          onTargetCompleted(nextTarget.id);
+        }
+
+        isCancelledRef.current = false;
+        isPausedRef.current = false;
+        setActivePhase(`[Queue Handover] Starting next queued target: [${nextTarget.domain}]...`);
+        setTimeout(() => {
+          runTargetLoop(nextTarget);
+        }, 300);
+        return;
+      }
+
+      // No more items in queue:
+      if (wasCancelled) {
+        setStatus('CANCELLED');
+        setCurrentTargetName(null);
+        setActivePhase('Crawl Stopped by User');
+      } else {
+        setStatus('COMPLETED');
+        setCurrentTargetName(null);
+        setActivePhase('All Domains Crawled Successfully');
+      }
+    },
+    [isContinuousMode, onTargetCompleted]
+  );
 
   // START CRAWLER
-  const startCrawler = useCallback(() => {
-    if (targetsRef.current.length === 0) {
-      alert('Target queue is empty. Please enter a domain in Manual Target Scope Entry before starting the crawler.');
-      return;
-    }
+  const startCrawler = useCallback(
+    (overrideTargets?: TargetItem[] | unknown) => {
+      let queueToUse = targetsRef.current;
+      if (Array.isArray(overrideTargets) && overrideTargets.length > 0) {
+        queueToUse = overrideTargets;
+        targetsRef.current = overrideTargets;
+      }
 
-    setSessionTotal(targetsRef.current.length);
-    setProcessedTargetsCount(0);
-    setActiveTargetResult(null);
-    runCrawlerQueue();
-  }, [runCrawlerQueue]);
+      if (queueToUse.length === 0) {
+        return;
+      }
+
+      // Dequeue first target as active, remaining targets stay in queue
+      const firstTarget = queueToUse[0];
+      const remaining = queueToUse.slice(1);
+      targetsRef.current = remaining;
+      if (onTargetCompleted) {
+        onTargetCompleted(firstTarget.id);
+      }
+
+      isCancelledRef.current = false;
+      isPausedRef.current = false;
+      setSessionTotal(1 + remaining.length);
+      setProcessedTargetsCount(0);
+      setActiveTargetResult(null);
+      runTargetLoop(firstTarget);
+    },
+    [onTargetCompleted, runTargetLoop]
+  );
+
+  // DYNAMICALLY ENQUEUE TARGETS WHILE RUNNING (Keeps them in queue)
+  const enqueueTargets = useCallback((newItems: TargetItem[]) => {
+    if (!newItems || newItems.length === 0) return;
+    const existingIds = new Set(targetsRef.current.map((t) => t.id));
+    const toAdd = newItems.filter((item) => !existingIds.has(item.id));
+    if (toAdd.length === 0) return;
+
+    targetsRef.current = [...targetsRef.current, ...toAdd];
+    setSessionTotal((prev) => prev + toAdd.length);
+  }, []);
 
   // PAUSE / STOP CRAWLER
   const pauseCrawler = useCallback(() => {
@@ -332,23 +403,44 @@ export function useCrawlerController(
 
   // RESUME CRAWLER
   const resumeCrawler = useCallback(() => {
-    if (targetsRef.current.length === 0) {
-      setStatus('COMPLETED');
-      return;
+    if (activeTargetRef.current) {
+      isPausedRef.current = false;
+      isCancelledRef.current = false;
+      runTargetLoop(activeTargetRef.current);
+    } else if (targetsRef.current.length > 0) {
+      startCrawler();
     }
-    isPausedRef.current = false;
-    isCancelledRef.current = false;
-    runCrawlerQueue();
-  }, [runCrawlerQueue]);
+  }, [runTargetLoop, startCrawler]);
 
-  // CANCEL CRAWLER
+  // CANCEL CRAWLER (Cancels active domain; if items in queue, advances to next queued domain)
   const cancelCrawler = useCallback(() => {
     isCancelledRef.current = true;
     isPausedRef.current = false;
-    setStatus('CANCELLED');
-    setCurrentTargetName(null);
-    setActivePhase('Crawl Cancelled');
-  }, []);
+    activeTargetRef.current = null;
+    setActivePhase('Cancelling active crawl...');
+
+    // If currently paused, immediately trigger handover to next queued target:
+    if (status === 'PAUSED') {
+      if (targetsRef.current.length > 0) {
+        const nextTarget = targetsRef.current[0];
+        const remaining = targetsRef.current.slice(1);
+        targetsRef.current = remaining;
+        if (onTargetCompleted) {
+          onTargetCompleted(nextTarget.id);
+        }
+        isCancelledRef.current = false;
+        isPausedRef.current = false;
+        setActivePhase(`[Queue Handover] Starting next queued target: [${nextTarget.domain}]...`);
+        setTimeout(() => {
+          runTargetLoop(nextTarget);
+        }, 300);
+      } else {
+        setStatus('CANCELLED');
+        setCurrentTargetName(null);
+        setActivePhase('Crawl Stopped by User');
+      }
+    }
+  }, [status, onTargetCompleted, runTargetLoop]);
 
   // CLEAR RESULTS
   const clearResults = useCallback(() => {
@@ -420,13 +512,19 @@ export function useCrawlerController(
     databaseTotalSubdomains,
     databaseTotalEmails,
     databaseTotalCountries,
+    cycleCount,
+    isContinuous: isContinuousMode,
   };
 
   return {
     status,
     stats,
     scrapedResults,
+    isContinuousMode,
+    setIsContinuousMode,
+    cycleCount,
     startCrawler,
+    enqueueTargets,
     pauseCrawler,
     resumeCrawler,
     cancelCrawler,

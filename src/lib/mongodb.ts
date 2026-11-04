@@ -88,6 +88,17 @@ const ScrapedResultSchema = new mongoose.Schema(
     rootDomain: { type: String },
     subdomain: { type: String, default: '' },
     subdomains: { type: [String], default: [] },
+    subdomainDetails: {
+      type: [
+        {
+          subdomain: { type: String, required: true },
+          status: { type: String, default: 'ACTIVE' },
+          firstSeen: { type: String },
+          lastSeen: { type: String },
+        },
+      ],
+      default: [],
+    },
     subdomainCount: { type: Number, default: 0 },
     email: { type: String, default: '' },
     emails: { type: [String], default: [] },

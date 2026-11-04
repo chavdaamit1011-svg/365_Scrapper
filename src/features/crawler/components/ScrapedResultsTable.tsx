@@ -28,6 +28,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { ScrapedDataRecord, CrawledPageDetail } from '../types/crawler.types';
 import { exportCrawlerResultsToCSV } from '../utils/exportCrawlerResults';
+import { SubdomainListExplorer } from './SubdomainListExplorer';
 
 interface ScrapedResultsTableProps {
   records: ScrapedDataRecord[];
@@ -551,11 +552,16 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 const subdomains = r.subdomains || [];
                 const emails = r.emails || [];
                 const crawledPages = r.crawledPages || [];
+                const isCurrentlyCrawling = r.status === 'CRAWLING';
                 const isOffline =
-                  r.status === 'OFFLINE' ||
-                  r.status === 'UNREACHABLE' ||
-                  r.pagesCrawled === 0 ||
-                  (Array.isArray(crawledPages) && crawledPages.some((p) => (p.statusCode && p.statusCode >= 500) || p.title?.includes('Unreachable')));
+                  !isCurrentlyCrawling &&
+                  (r.status === 'OFFLINE' ||
+                    r.status === 'UNREACHABLE' ||
+                    r.status === 'TIMED_OUT' ||
+                    r.status === 'DNS_ERROR' ||
+                    r.status === 'CONNECTION_REFUSED' ||
+                    r.status === 'SSL_ERROR' ||
+                    (Boolean(r.errorCode) && r.pagesCrawled === 0 && (!r.subdomains || r.subdomains.length === 0)));
 
                 return (
                   <React.Fragment key={r.id || idx}>
@@ -581,7 +587,25 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13.5px' }}>
                                 {r.domain}
                               </span>
-                              {isOffline ? (
+                              {isCurrentlyCrawling ? (
+                                <span
+                                  style={{
+                                    fontSize: '10.5px',
+                                    fontWeight: 700,
+                                    color: '#0369a1',
+                                    background: '#e0f2fe',
+                                    padding: '1px 6px',
+                                    borderRadius: '4px',
+                                    border: '1px solid #bae6fd',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                  }}
+                                >
+                                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#0284c7' }} />
+                                  CRAWLING
+                                </span>
+                              ) : isOffline ? (
                                 <span
                                   style={{
                                     fontSize: '10.5px',
@@ -619,7 +643,18 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </span>
                               ) : null}
                             </div>
-                            {isOffline ? (
+                            {isCurrentlyCrawling ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginTop: '3px' }}>
+                                <span style={{ color: '#0284c7', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                  <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#0284c7' }} />
+                                  {r.pagesCrawled && r.pagesCrawled > 0 ? `Crawling page ${r.pagesCrawled}...` : 'Discovering scope & subdomains...'}
+                                </span>
+                                <span>•</span>
+                                <span style={{ color: 'var(--text-muted)' }}>
+                                  {r.pagesCrawled || 0} pages crawled
+                                </span>
+                              </div>
+                            ) : isOffline ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginTop: '3px' }}>
                                 <span style={{ color: '#dc2626', fontWeight: 600 }}>
                                   ⚠️ {r.errorTitle || (r.status === 'TIMED_OUT' ? 'Connection Timed Out' : r.status === 'DNS_ERROR' ? 'DNS Resolution Failed' : r.status === 'CONNECTION_REFUSED' ? 'Connection Refused' : r.status === 'SSL_ERROR' ? 'SSL Handshake Error' : 'Site Inaccessible')}
@@ -1413,48 +1448,11 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   No subdomains discovered for this domain.
                                 </p>
                               ) : (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-                                  {subdomains.map((sub) => {
-                                    const targetUrl = sub.startsWith('http://') || sub.startsWith('https://') ? sub : `https://${sub}`;
-                                    return (
-                                      <a
-                                        key={sub}
-                                        href={targetUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        title={`Open ${targetUrl} in new tab`}
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          gap: '6px',
-                                          padding: '5px 12px',
-                                          borderRadius: '6px',
-                                          background: '#f8fafc',
-                                          border: '1px solid #cbd5e1',
-                                          fontSize: '12px',
-                                          color: '#0369a1',
-                                          fontWeight: 500,
-                                          textDecoration: 'none',
-                                          cursor: 'pointer',
-                                          transition: 'all 0.15s ease',
-                                        }}
-                                        onMouseEnter={(e) => {
-                                          e.currentTarget.style.background = '#e0f2fe';
-                                          e.currentTarget.style.borderColor = '#7dd3fc';
-                                          e.currentTarget.style.color = '#0284c7';
-                                        }}
-                                        onMouseLeave={(e) => {
-                                          e.currentTarget.style.background = '#f8fafc';
-                                          e.currentTarget.style.borderColor = '#cbd5e1';
-                                          e.currentTarget.style.color = '#0369a1';
-                                        }}
-                                      >
-                                        <span>{sub}</span>
-                                        <ExternalLink size={12} color="#0284c7" style={{ flexShrink: 0 }} />
-                                      </a>
-                                    );
-                                  })}
-                                </div>
+                                <SubdomainListExplorer
+                                  subdomains={subdomains}
+                                  domainName={r.domain}
+                                  subdomainDetails={r.subdomainDetails}
+                                />
                               )}
                             </div>
 

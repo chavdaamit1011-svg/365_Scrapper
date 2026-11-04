@@ -53,12 +53,20 @@ export interface ReconciliationStats {
   audit_changes_recorded: number;
 }
 
+export interface SubdomainItemDetail {
+  subdomain: string;
+  status: 'NEW' | 'ACTIVE' | 'REMOVED';
+  firstSeen?: string;
+  lastSeen?: string;
+}
+
 export interface ScrapedDomainRecord {
   id: string;
   domain: string;
   rootDomain: string;
   subdomain: string;
   subdomains: string[];
+  subdomainDetails?: SubdomainItemDetail[];
   subdomainCount: number;
   email: string;
   emails: string[];
