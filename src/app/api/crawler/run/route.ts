@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server';
-import { executeCrawlerOnDomain } from '@/lib/pythonCrawler';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,17 +17,14 @@ export async function POST(req: Request) {
     const maxPages = Number(body.maxPages) || 5;
     const maxDepth = Number(body.maxDepth) || 2;
 
-    console.log(`[API /api/crawler/run] Starting crawl for: ${domain} (pages: ${maxPages}, depth: ${maxDepth})`);
-
-    const result = await executeCrawlerOnDomain(domain, maxPages, maxDepth);
+    console.log(`[API /api/crawler/run] Received crawl request for: ${domain} (pages: ${maxPages}, depth: ${maxDepth})`);
 
     return NextResponse.json({
-      success: result.success,
-      domain: result.domain,
-      records: result.records,
-      count: result.records.length,
-      logs: result.logs,
-      error: result.error,
+      success: true,
+      domain,
+      records: [],
+      count: 0,
+      logs: ['Ready for JS/TS crawler engine.'],
     });
   } catch (err: any) {
     console.error('[API /api/crawler/run] Unexpected error:', err);

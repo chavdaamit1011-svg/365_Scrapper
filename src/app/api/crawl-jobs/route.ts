@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server';
 import { redisQueue } from '@/lib/redisQueue';
-import { spawn } from 'child_process';
-import path from 'path';
-import { getPythonExecutable } from '@/lib/pythonCrawler';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/crawl-jobs
- * Enqueues a domain crawl job into Redis (Component 1 & 2 of PDF Architecture)
+ * Enqueues a domain crawl job into Redis (Component 1 & 2 of Architecture)
  */
 export async function POST(req: Request) {
   try {
@@ -37,32 +34,11 @@ export async function POST(req: Request) {
       respectRobotsTxt,
     });
 
-    // 2. Trigger Python worker asynchronously in background (Non-blocking Next.js API)
-    const pythonBin = getPythonExecutable();
-    const workerScript = path.join(process.cwd(), 'crawler_engine', 'worker.py');
-
-    const workerArgs = [
-      workerScript,
-      '--job-id', job.id,
-      '--domain', cleanDomain,
-      '--max-pages', String(maxPages),
-      '--max-depth', String(maxDepth),
-    ];
-
-    console.log(`[API /api/crawl-jobs] Enqueued ${job.id} for ${cleanDomain}. Spawning worker...`);
-
-    const workerProcess = spawn(pythonBin, workerArgs, {
-      cwd: path.join(process.cwd(), 'crawler_engine'),
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, PYTHONUNBUFFERED: '1' },
-    });
-
-    workerProcess.unref();
+    console.log(`[API /api/crawl-jobs] Enqueued ${job.id} for ${cleanDomain}. Ready for crawler execution.`);
 
     const redisStatus = redisQueue.getRedisStatus();
 
-    // 3. Respond immediately with job_id and status (Component 1 of PDF)
+    // 2. Respond immediately with job_id and status
     return NextResponse.json({
       success: true,
       job_id: job.id,
