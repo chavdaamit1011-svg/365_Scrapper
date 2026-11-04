@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Radar,
   Target,
+  Search,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -13,7 +14,7 @@ import {
 import { UserSummary } from '@/types';
 import { Badge } from '@/components/ui/Badge';
 
-export type NavTab = 'targets' | 'settings';
+export type NavTab = 'targets' | 'dorking' | 'settings';
 
 interface SpatialSidebarProps {
   activeTab: NavTab;
@@ -40,6 +41,12 @@ export const SpatialSidebar: React.FC<SpatialSidebarProps> = ({
       label: 'Target & Crawler',
       icon: <Target size={18} />,
       badge: targetsCount > 0 ? `${targetsCount} Scope` : 'Scope',
+    },
+    {
+      id: 'dorking' as NavTab,
+      label: 'Dorking Engine',
+      icon: <Search size={18} />,
+      badge: 'OSINT Recon',
     },
     {
       id: 'settings' as NavTab,

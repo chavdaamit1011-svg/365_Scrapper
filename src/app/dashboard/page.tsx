@@ -26,6 +26,7 @@ import { TargetItem } from '@/features/targets/types/target.types';
 import { CrawlerControlBar } from '@/features/crawler/components/CrawlerControlBar';
 import { ScrapedResultsTable } from '@/features/crawler/components/ScrapedResultsTable';
 import { useCrawlerController } from '@/features/crawler/hooks/useCrawlerController';
+import { DorkingDashboard } from '@/features/dorking/components/DorkingDashboard';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { UserSummary } from '@/types';
@@ -536,7 +537,10 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Tab 2: Authorized System Operators (IAM) */}
+        {/* Tab 2: Dorking Engine (Search Engine Reconnaissance) */}
+        {activeTab === 'dorking' && <DorkingDashboard />}
+
+        {/* Tab 3: Authorized System Operators (IAM) */}
         {activeTab === 'settings' && (
           <div>
             <Card style={{ padding: '24px' }}>
