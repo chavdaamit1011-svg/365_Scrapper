@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server';
 import { redisQueue } from '@/lib/redisQueue';
+import { crawlDomain } from '@/lib/crawler/crawlerEngine';
 
 export const dynamic = 'force-dynamic';
 
 /**
  * POST /api/crawl-jobs
- * Enqueues a domain crawl job into Redis (Component 1 & 2 of Architecture)
+ * Enqueues a domain crawl job into Redis and executes native TS crawler asynchronously
  */
 export async function POST(req: Request) {
   try {
@@ -34,11 +35,44 @@ export async function POST(req: Request) {
       respectRobotsTxt,
     });
 
-    console.log(`[API /api/crawl-jobs] Enqueued ${job.id} for ${cleanDomain}. Ready for crawler execution.`);
+    console.log(`[API /api/crawl-jobs] Enqueued ${job.id} for ${cleanDomain}. Starting asynchronous TS crawler...`);
+
+    // 2. Trigger asynchronous background crawl execution (Non-blocking)
+    (async () => {
+      try {
+        await redisQueue.updateJobStatus(job.id, 'running');
+
+        const result = await crawlDomain(cleanDomain, {
+          maxPages,
+          maxDepth,
+          delayMs: Math.max(100, Math.floor(1000 / requestsPerSecond)),
+          onProgress: (pages, subdomains, emails) => {
+            redisQueue.updateJobStatus(job.id, 'running', {
+              pagesCrawled: pages,
+              subdomainsCount: subdomains,
+              emailsCount: emails,
+            });
+          },
+        });
+
+        await redisQueue.updateJobStatus(job.id, 'completed', {
+          pagesCrawled: result.pagesCrawled,
+          subdomainsCount: result.subdomainCount,
+          emailsCount: result.emailCount,
+        });
+
+        console.log(`[API /api/crawl-jobs] Completed job ${job.id} for ${cleanDomain}`);
+      } catch (err: any) {
+        console.error(`[API /api/crawl-jobs] Job ${job.id} failed:`, err);
+        await redisQueue.updateJobStatus(job.id, 'failed', {
+          error: err?.message || 'Crawl failed',
+        });
+      }
+    })();
 
     const redisStatus = redisQueue.getRedisStatus();
 
-    // 2. Respond immediately with job_id and status
+    // 3. Respond immediately with job_id and status
     return NextResponse.json({
       success: true,
       job_id: job.id,
@@ -75,10 +109,10 @@ export async function GET() {
       jobs,
     });
   } catch (err: any) {
+    console.error('[API /api/crawl-jobs GET] Error fetching jobs:', err);
     return NextResponse.json(
-      { success: false, message: err.message || 'Failed to fetch crawl jobs' },
+      { success: false, message: 'Failed to retrieve jobs list' },
       { status: 500 }
     );
   }
 }
-
