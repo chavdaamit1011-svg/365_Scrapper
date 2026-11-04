@@ -89,13 +89,16 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     }
   };
 
-  // 1. Vector: MongoDB Cross-Reference (Previously stored targets and subdomains)
+  // 1. Vector: MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
   const fetchMongo = async () => {
     try {
       const conn = await connectMongo();
       if (!conn?.connection?.db) return;
 
-      const coll = conn.connection.db.collection('scraped_results');
+      const db = conn.connection.db;
+
+      // 1a. Prior crawler results
+      const coll = db.collection('scraped_results');
       const docs = await coll.find(
         { rootDomain: cleanRoot },
         { projection: { subdomains: 1, subdomain: 1 } }
@@ -106,6 +109,26 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         if (Array.isArray(d.subdomains)) {
           for (const s of d.subdomains) addSub(s);
         }
+      }
+
+      // 1b. Dorking Engine master_subdomains table
+      const dorkSubs = await db.collection('master_subdomains').find(
+        { domain: cleanRoot },
+        { projection: { subdomain: 1 } }
+      ).limit(500).toArray();
+
+      for (const ds of dorkSubs) {
+        if (ds.subdomain) addSub(ds.subdomain);
+      }
+
+      // 1c. Direct dorking discoveries table
+      const dorkResults = await db.collection('dorking_results').find(
+        { rootDomain: cleanRoot },
+        { projection: { hostname: 1 } }
+      ).limit(500).toArray();
+
+      for (const dr of dorkResults) {
+        if (dr.hostname) addSub(dr.hostname);
       }
     } catch (e) {
       // MongoDB optional
@@ -256,7 +279,25 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     }
   };
 
-  // Run all 6 discovery vectors in parallel!
+  // 7. Vector: Dorking Engine Automated Search Discovery (Google, Bing, SerpApi, DuckDuckGo)
+  const fetchDorkingEngine = async () => {
+    try {
+      const { DorkingDiscoveryEngine } = await import('@/modules/dorking/engine/discoveryEngine');
+      const engine = DorkingDiscoveryEngine.getInstance();
+      const activeProviders = engine.getSearchManager().getActiveProviders();
+      if (activeProviders.length > 0) {
+        // Trigger automated dorking job for the target root domain
+        await engine.startJob({
+          domain: cleanRoot,
+          maxPagesPerQuery: 1,
+        });
+      }
+    } catch (e) {
+      // Dorking non-blocking
+    }
+  };
+
+  // Run all 7 discovery vectors in parallel!
   await Promise.allSettled([
     fetchMongo(),
     fetchCrtSh(),
@@ -264,6 +305,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     fetchHackerTarget(),
     fetchArchiveOrg(),
     probeDnsDictionary(),
+    fetchDorkingEngine(),
   ]);
 
   // Return clean, alphabetically sorted list of unique subdomains
