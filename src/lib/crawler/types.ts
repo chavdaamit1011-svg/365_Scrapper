@@ -96,3 +96,4 @@ export interface FetchResult {
   errorCode?: string;
   errorTitle?: string;
 }
+

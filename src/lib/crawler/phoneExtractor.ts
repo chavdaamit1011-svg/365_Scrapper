@@ -57,3 +57,4 @@ export function extractPhoneNumbers(htmlOrText: string): string[] {
 
   return Array.from(foundNumbers).slice(0, 5);
 }
+

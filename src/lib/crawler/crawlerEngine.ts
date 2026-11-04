@@ -11,7 +11,7 @@ import {
   VerifiedEmailDetail,
 } from './types';
 import { extractRootDomain, discoverAllSubdomains, isValidSubdomain } from './subdomainRecon';
-import { fetchHtmlWithProtocolFallback } from './httpFetcher';
+import { fetchUniversal } from './universalFetcher';
 import { extractLinksAndSubdomains, getUrlPriority } from './linkExtractor';
 import { extractAndVerifyEmails } from './emailExtractor';
 import { extractPhoneNumbers } from './phoneExtractor';
@@ -148,7 +148,7 @@ export async function crawlDomain(
 
   // Step 2: Test accessibility & fetch root landing page
   console.log(`[CrawlerEngine] Testing connectivity on ${startUrl}...`);
-  const rootFetchResult = await fetchHtmlWithProtocolFallback(startUrl, timeoutMs);
+  const rootFetchResult = await fetchUniversal(startUrl, timeoutMs);
 
   let finalStatus = 'RESOLVED';
   let errorCode: string | null = null;
@@ -265,7 +265,7 @@ export async function crawlDomain(
       }
 
       console.log(`[CrawlerEngine] Crawling page [${pagesCrawled + 1}/${maxPages}]: ${current.url}`);
-      const pageRes = await fetchHtmlWithProtocolFallback(current.url, timeoutMs);
+      const pageRes = await fetchUniversal(current.url, timeoutMs);
 
       if (!pageRes.ok || !pageRes.html) {
         visitedRecords.push({

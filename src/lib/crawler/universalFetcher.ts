@@ -1,10 +1,12 @@
 /**
- * Resilient HTTP & HTTPS Client for Next.js / TypeScript Crawler
- * Handles:
- * - Both HTTPS and HTTP protocols with automatic protocol fallback
- * - Expired, self-signed, or untrusted SSL/TLS certificates (NIC CCA / Government certs)
+ * Universal Web Fetcher for Next.js / TypeScript Crawler
+ *
+ * Universal protocol support:
+ * - Full HTTPS and HTTP support for all subdomain types (2nd, 3rd, 4th level, etc.)
+ * - Bypasses expired, self-signed, or untrusted SSL/TLS certificates (NIC CCA / Government certs)
  * - Automatic redirect following (up to 5 hops)
- * - Structured network error diagnosis (ERR_CONNECTION_TIMED_OUT, ERR_NAME_NOT_RESOLVED, etc.)
+ * - Multi-protocol fallback (HTTPS -> HTTP or HTTP -> HTTPS)
+ * - Accurate technical error diagnostics (ERR_CONNECTION_TIMED_OUT, ERR_NAME_NOT_RESOLVED, etc.)
  */
 
 import http from 'http';
@@ -12,7 +14,7 @@ import https from 'https';
 import { URL } from 'url';
 import { FetchResult } from './types';
 
-// Custom agents to bypass certificate verification failures (e.g. CERT_HAS_EXPIRED on gov/state portals)
+// Universal agents to handle all protocols and bypass SSL certificate issues
 const httpsAgent = new https.Agent({
   rejectUnauthorized: false,
   keepAlive: true,
@@ -34,7 +36,7 @@ const DEFAULT_HEADERS = {
 };
 
 /**
- * Performs a single HTTP/HTTPS request with SSL fallback and redirect following
+ * Performs a single universal web request (HTTPS or HTTP)
  */
 export function requestOnce(
   rawUrl: string,
@@ -69,7 +71,7 @@ export function requestOnce(
         timeout: timeoutMs,
       },
       (res) => {
-        let chunks: Buffer[] = [];
+        const chunks: Buffer[] = [];
 
         res.on('data', (chunk) => {
           chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -77,7 +79,6 @@ export function requestOnce(
 
         res.on('end', () => {
           const bodyBuffer = Buffer.concat(chunks);
-          // Simple string conversion (Node automatically handles raw UTF-8)
           const body = bodyBuffer.toString('utf-8');
           resolve({
             statusCode: res.statusCode || 200,
@@ -102,7 +103,7 @@ export function requestOnce(
 }
 
 /**
- * Fetches a URL with automatic redirect handling (up to 5 redirects)
+ * Universally fetches any URL following redirects (301, 302, 303, 307, 308) up to 5 times
  */
 export async function fetchWithRedirects(
   startUrl: string,
@@ -120,7 +121,6 @@ export async function fetchWithRedirects(
   while (redirects < maxRedirects) {
     const res = await requestOnce(currentUrl, timeoutMs);
 
-    // Check for redirect status codes: 301, 302, 303, 307, 308
     if (
       res.statusCode >= 300 &&
       res.statusCode < 400 &&
@@ -128,7 +128,6 @@ export async function fetchWithRedirects(
     ) {
       redirects++;
       const redirectLocation = res.headers.location;
-      // Resolve relative or protocol-relative redirects
       currentUrl = new URL(redirectLocation, currentUrl).toString();
       continue;
     }
@@ -145,9 +144,9 @@ export async function fetchWithRedirects(
 }
 
 /**
- * High-level fetcher with HTTPS -> HTTP fallback and error diagnosis
+ * Universal fetcher that works across all URL forms, HTTPS, HTTP, and multi-level subdomains
  */
-export async function fetchHtmlWithProtocolFallback(
+export async function fetchUniversal(
   targetUrlOrDomain: string,
   timeoutMs: number = 10000
 ): Promise<FetchResult> {
@@ -156,7 +155,7 @@ export async function fetchHtmlWithProtocolFallback(
     clean = `https://${clean}`;
   }
 
-  // Attempt 1: As provided (usually HTTPS)
+  // Attempt 1: As target requests (default HTTPS)
   try {
     const res = await fetchWithRedirects(clean, timeoutMs);
     const contentType = (res.headers['content-type'] as string) || 'text/html';
@@ -169,9 +168,7 @@ export async function fetchHtmlWithProtocolFallback(
       contentType,
     };
   } catch (err1: any) {
-    const errStr = String(err1?.message || err1 || '').toLowerCase();
-
-    // If HTTPS failed due to timeout, SSL protocol mismatch, or refusal, try HTTP fallback
+    // If HTTPS failed due to SSL handshake, expired cert, or timeout, try HTTP fallback
     const isHttps = clean.startsWith('https://');
     if (isHttps) {
       const httpFallbackUrl = clean.replace(/^https:\/\//i, 'http://');
@@ -187,12 +184,10 @@ export async function fetchHtmlWithProtocolFallback(
           contentType,
         };
       } catch (err2: any) {
-        // Both HTTPS and HTTP failed -> Diagnose error
         return diagnoseNetworkError(err1, clean);
       }
     }
 
-    // Direct HTTP failed -> Diagnose error
     return diagnoseNetworkError(err1, clean);
   }
 }
