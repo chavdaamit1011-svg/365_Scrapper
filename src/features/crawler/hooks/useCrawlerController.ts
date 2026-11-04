@@ -129,6 +129,9 @@ export function useCrawlerController(
       setStatus('RUNNING');
       isCancelledRef.current = false;
       isPausedRef.current = false;
+      setTargetSubProgress(12);
+      setActiveTargetResult(null);
+      setElapsedSeconds(0);
 
       let currentCycle = 1;
 
@@ -331,6 +334,9 @@ export function useCrawlerController(
 
         isCancelledRef.current = false;
         isPausedRef.current = false;
+        setTargetSubProgress(12);
+        setActiveTargetResult(null);
+        setElapsedSeconds(0);
         setActivePhase(`[Queue Handover] Starting next queued target: [${nextTarget.domain}]...`);
         setTimeout(() => {
           runTargetLoop(nextTarget);
@@ -430,6 +436,9 @@ export function useCrawlerController(
         }
         isCancelledRef.current = false;
         isPausedRef.current = false;
+        setTargetSubProgress(12);
+        setActiveTargetResult(null);
+        setElapsedSeconds(0);
         setActivePhase(`[Queue Handover] Starting next queued target: [${nextTarget.domain}]...`);
         setTimeout(() => {
           runTargetLoop(nextTarget);
@@ -466,19 +475,18 @@ export function useCrawlerController(
     } catch (e) {}
   }, [status]);
 
-  // Derived statistics with realistic dynamic progress & separated metrics
-  const effectiveTotal = Math.max(sessionTotal, targets.length, processedTargetsCount, 1);
-  const targetWeight = 100 / effectiveTotal;
-  const baseProgress = (processedTargetsCount / effectiveTotal) * 100;
-  const activeContribution = (targetSubProgress / 100) * targetWeight;
+  // Dynamic progress reflects the active domain's live scanning progress (starts fresh for every domain)
+  const effectiveTotal = Math.max(sessionTotal, targets.length + (activeTargetRef.current ? 1 : 0), processedTargetsCount, 1);
 
   let dynamicProgress = 0;
   if (status === 'COMPLETED') {
     dynamicProgress = 100;
   } else if (status === 'RUNNING') {
-    dynamicProgress = Math.min(99, Math.max(12, Math.round(baseProgress + activeContribution)));
+    dynamicProgress = Math.min(99, Math.max(10, targetSubProgress));
   } else if (status === 'PAUSED') {
-    dynamicProgress = Math.round(baseProgress);
+    dynamicProgress = Math.min(99, Math.max(10, targetSubProgress));
+  } else if (status === 'CANCELLED') {
+    dynamicProgress = 0;
   }
 
   // Database lifetime totals (across all domains)
