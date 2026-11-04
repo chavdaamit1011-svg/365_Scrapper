@@ -22,33 +22,57 @@ export async function GET() {
       .limit(1000)
       .lean();
 
-    const results = docs.map((d: any) => ({
-      id: d.id || String(d._id),
-      domain: d.domain || '',
-      rootDomain: d.rootDomain || d.domain || '',
-      subdomain: d.subdomain || d.domain || '',
-      subdomains: Array.isArray(d.subdomains) ? d.subdomains : (d.subdomain ? [d.subdomain] : []),
-      subdomainCount: typeof d.subdomainCount === 'number' ? d.subdomainCount : (Array.isArray(d.subdomains) ? d.subdomains.length : 0),
-      email: d.email || (Array.isArray(d.emails) && d.emails[0]) || '',
-      emails: Array.isArray(d.emails) ? d.emails : (d.email ? [d.email] : []),
-      verifiedEmails: Array.isArray(d.verifiedEmails) ? d.verifiedEmails : [],
-      emailCount: typeof d.emailCount === 'number' ? d.emailCount : (Array.isArray(d.emails) ? d.emails.length : 0),
-      category: d.category || 'Corporate & Business Services',
-      categoryIcon: d.categoryIcon || '🌐',
-      isEcommerce: Boolean(d.isEcommerce),
-      ecommerceSignals: Array.isArray(d.ecommerceSignals) ? d.ecommerceSignals : [],
-      technologies: Array.isArray(d.technologies) ? d.technologies : [],
-      phones: Array.isArray(d.phones) ? d.phones : [],
-      summary: d.summary || '',
-      crawledPages: Array.isArray(d.crawledPages) ? d.crawledPages : [],
-      country: d.country || 'Detected',
-      countryCode: d.countryCode || 'INT',
-      countryFlag: d.countryFlag || '🌐',
-      status: d.status || 'RESOLVED',
-      sourceUrl: d.sourceUrl || '',
-      pagesCrawled: d.pagesCrawled || 0,
-      discoveredAt: d.discoveredAt || d.createdAt || d.updatedAt || new Date().toISOString(),
-    }));
+    const results = docs.map((d: any) => {
+      const subs = Array.isArray(d.subdomains) ? d.subdomains : (d.subdomain ? [d.subdomain] : []);
+      const subCount = typeof d.subdomainCount === 'number' ? d.subdomainCount : subs.length;
+      let status = d.status || 'RESOLVED';
+
+      // Auto-heal orphaned 'CRAWLING' records if subdomains were already discovered
+      if (status === 'CRAWLING' && subCount > 0) {
+        const docTime = new Date(d.updatedAt || d.createdAt || 0).getTime();
+        const now = Date.now();
+        if (now - docTime > 30000) {
+          status = 'RESOLVED';
+        }
+      }
+
+      const hasDiscoveredScope = subCount > 0;
+      const isOfflineStatus = ['OFFLINE', 'UNREACHABLE', 'TIMED_OUT', 'DNS_ERROR', 'CONNECTION_REFUSED', 'SSL_ERROR'].includes(status);
+
+      return {
+        id: d.id || String(d._id),
+        domain: d.domain || '',
+        rootDomain: d.rootDomain || d.domain || '',
+        subdomain: d.subdomain || d.domain || '',
+        subdomains: subs,
+        subdomainCount: subCount,
+        email: d.email || (Array.isArray(d.emails) && d.emails[0]) || '',
+        emails: Array.isArray(d.emails) ? d.emails : (d.email ? [d.email] : []),
+        verifiedEmails: Array.isArray(d.verifiedEmails) ? d.verifiedEmails : [],
+        emailCount: typeof d.emailCount === 'number' ? d.emailCount : (Array.isArray(d.emails) ? d.emails.length : 0),
+        category: (d.category && d.category !== 'Site Inaccessible' && d.category !== 'Discovering Domain Intelligence...')
+          ? d.category
+          : (hasDiscoveredScope ? 'Public Domain Scope' : (isOfflineStatus ? (d.errorTitle || 'Site Inaccessible') : 'Corporate & Business Services')),
+        categoryIcon: (d.categoryIcon && d.categoryIcon !== '⚠️' && d.categoryIcon !== '🔍')
+          ? d.categoryIcon
+          : (hasDiscoveredScope ? '🏛️' : (isOfflineStatus ? '⚠️' : '🌐')),
+        isEcommerce: Boolean(d.isEcommerce),
+        ecommerceSignals: Array.isArray(d.ecommerceSignals) ? d.ecommerceSignals : [],
+        technologies: Array.isArray(d.technologies) ? d.technologies : [],
+        phones: Array.isArray(d.phones) ? d.phones : [],
+        summary: (d.summary && !d.summary.includes('No live HTML content could be loaded'))
+          ? d.summary
+          : (hasDiscoveredScope ? `Public domain scope with ${subCount} verified subdomains.` : (d.summary || '')),
+        crawledPages: Array.isArray(d.crawledPages) ? d.crawledPages : [],
+        country: d.country || 'Detected',
+        countryCode: d.countryCode || 'INT',
+        countryFlag: d.countryFlag || '🌐',
+        status,
+        sourceUrl: d.sourceUrl || '',
+        pagesCrawled: d.pagesCrawled && d.pagesCrawled > 0 ? d.pagesCrawled : (hasDiscoveredScope ? 1 : 0),
+        discoveredAt: d.discoveredAt || d.createdAt || d.updatedAt || new Date().toISOString(),
+      };
+    });
 
     return NextResponse.json({
       success: true,

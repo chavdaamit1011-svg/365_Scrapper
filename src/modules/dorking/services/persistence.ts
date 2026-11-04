@@ -17,11 +17,9 @@ import {
 
 const DORKING_STORAGE_FILE = path.join(process.cwd(), '.screpper-dorking-data.json');
 
-export function generateEntityId(entityType: 'domain' | 'subdomain', value: string): string {
-  const norm = value.trim().toLowerCase();
-  const hash = crypto.createHash('sha256').update(`${entityType}:${norm}`).digest('hex');
-  return `${entityType}_${hash.slice(0, 16)}`;
-}
+import { generateEntityId } from '@/lib/entityId';
+
+export { generateEntityId };
 
 interface FallbackStorageSchema {
   jobs: DorkingJob[];

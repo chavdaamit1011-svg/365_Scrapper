@@ -2,24 +2,23 @@
  * Phase 2 Reconciliation & Master Storage Engine (Native TypeScript / MongoDB)
  * Components:
  * - SHA-256 entity ID generation
+ * - Bloom Filter memory pre-check layer (DEFINITELY_NEW vs PROBABLY_EXISTS)
  * - Diff Evaluation: NEW, CHANGED, SAME, MISSING
+ * - High-speed MongoDB bulk operations (bulkWrite)
  * - Immutable Audit Logging in data_changes
  * - Master Relational Sync to MongoDB master collections
  */
 
-import crypto from 'crypto';
 import { connectMongo } from '../../mongodb';
 import { ScrapedDomainRecord, ReconciliationStats, SubdomainItemDetail } from '../types';
+import { generateEntityId } from '@/lib/entityId';
+import { getSharedBloomFilter } from '../bloomFilter';
 
-export function generateEntityId(entityType: 'domain' | 'subdomain' | 'email', value: string): string {
-  const norm = value.trim().toLowerCase();
-  const hash = crypto.createHash('sha256').update(`${entityType}:${norm}`).digest('hex');
-  return `${entityType}_${hash.slice(0, 16)}`;
-}
+export { generateEntityId };
 
 /**
  * Reconciles crawl results against previous observations in MongoDB
- * Tracks mutations and updates master records
+ * Tracks mutations and updates master records with nanosecond memory pre-checks
  */
 export async function reconcileAndStoreResult(
   record: ScrapedDomainRecord
@@ -43,20 +42,37 @@ export async function reconcileAndStoreResult(
   const db = conn.connection.db;
   const nowIso = new Date().toISOString();
   const domainId = generateEntityId('domain', record.domain);
+  const bloom = getSharedBloomFilter();
 
-  // 1. Check existing master domain
-  const existingMaster = await db.collection('master_domains').findOne({ id: domainId });
-  if (existingMaster) {
-    stats.domain_action = 'EXISTING_UPDATED';
-  } else {
+  // Prewarm Bloom Filter from MongoDB on first use
+  await bloom.prewarmFromMongo(db);
+
+  // 1. Check existing master domain using Bloom Filter 2-tier check
+  const domainBloomCheck = bloom.check(record.domain);
+  if (domainBloomCheck === 'DEFINITELY_NEW') {
+    // 100% guarantee it's not in DB; skip DB read query
     stats.domain_action = 'NEW';
+    bloom.add(record.domain);
+  } else {
+    // PROBABLY_EXISTS: Verify with actual DB query
+    const existingMaster = await db.collection('master_domains').findOne({ id: domainId });
+    if (existingMaster) {
+      stats.domain_action = 'EXISTING_UPDATED';
+    } else {
+      // False positive confirmed: genuinely new domain
+      stats.domain_action = 'NEW';
+      bloom.add(record.domain);
+    }
   }
 
-  // 2. Subdomains Diff, Lifecycle Tracking & Upsert
+  // 2. Subdomains Diff, Lifecycle Tracking & Bulk Operations
   const existingSubDocs = await db.collection('master_subdomains').find({ domain_id: domainId }).toArray();
   const existingSubMap = new Map<string, any>(existingSubDocs.map((s: any) => [(s.subdomain || '').toLowerCase().trim(), s]));
   const crawledSubLowerSet = new Set<string>((record.subdomains || []).map((s) => s.toLowerCase().trim()));
   const subdomainDetails: SubdomainItemDetail[] = [];
+
+  const subBulkOps: any[] = [];
+  const changeBulkOps: any[] = [];
 
   // A. Process Crawled Subdomains (NEW or ACTIVE)
   for (const sub of record.subdomains || []) {
@@ -65,10 +81,15 @@ export async function reconcileAndStoreResult(
     const subId = generateEntityId('subdomain', subClean);
     const existing = existingSubMap.get(subLower);
 
-    if (!existing) {
+    // Fast memory pre-check with Bloom Filter
+    const subBloomCheck = bloom.check(subClean);
+
+    if (subBloomCheck === 'DEFINITELY_NEW' || !existing) {
       // Discovered New Subdomain in this cycle
       stats.new_subdomains++;
       stats.audit_changes_recorded++;
+      bloom.add(subClean);
+
       subdomainDetails.push({
         subdomain: subClean,
         status: 'NEW',
@@ -76,22 +97,29 @@ export async function reconcileAndStoreResult(
         lastSeen: nowIso,
       });
 
-      await db.collection('master_subdomains').updateOne(
-        { id: subId },
-        {
-          $set: { domain_id: domainId, domain: record.domain, subdomain: subClean, status: 'ACTIVE', last_seen: nowIso },
-          $setOnInsert: { first_seen: nowIso },
+      subBulkOps.push({
+        updateOne: {
+          filter: { id: subId },
+          update: {
+            $set: { domain_id: domainId, domain: record.domain, subdomain: subClean, status: 'ACTIVE', last_seen: nowIso },
+            $setOnInsert: { first_seen: nowIso },
+          },
+          upsert: true,
         },
-        { upsert: true }
-      );
-      await db.collection('data_changes').insertOne({
-        domain_id: domainId,
-        domain: record.domain,
-        entity_type: 'subdomain',
-        entity_id: subId,
-        change_type: 'NEW',
-        new_value: subClean,
-        detected_at: nowIso,
+      });
+
+      changeBulkOps.push({
+        insertOne: {
+          document: {
+            domain_id: domainId,
+            domain: record.domain,
+            entity_type: 'subdomain',
+            entity_id: subId,
+            change_type: 'NEW',
+            new_value: subClean,
+            detected_at: nowIso,
+          },
+        },
       });
     } else {
       // Previously existing subdomain
@@ -104,20 +132,26 @@ export async function reconcileAndStoreResult(
         lastSeen: nowIso,
       });
 
-      await db.collection('master_subdomains').updateOne(
-        { id: subId },
-        { $set: { status: 'ACTIVE', last_seen: nowIso } }
-      );
+      subBulkOps.push({
+        updateOne: {
+          filter: { id: subId },
+          update: { $set: { status: 'ACTIVE', last_seen: nowIso } },
+        },
+      });
 
       if (wasRemoved) {
-        await db.collection('data_changes').insertOne({
-          domain_id: domainId,
-          domain: record.domain,
-          entity_type: 'subdomain',
-          entity_id: subId,
-          change_type: 'REACTIVATED',
-          new_value: subClean,
-          detected_at: nowIso,
+        changeBulkOps.push({
+          insertOne: {
+            document: {
+              domain_id: domainId,
+              domain: record.domain,
+              entity_type: 'subdomain',
+              entity_id: subId,
+              change_type: 'REACTIVATED',
+              new_value: subClean,
+              detected_at: nowIso,
+            },
+          },
         });
       }
     }
@@ -136,19 +170,25 @@ export async function reconcileAndStoreResult(
         lastSeen: existingDoc.last_seen,
       });
 
-      await db.collection('master_subdomains').updateOne(
-        { id: existingDoc.id },
-        { $set: { status: 'REMOVED', last_checked: nowIso } }
-      );
+      subBulkOps.push({
+        updateOne: {
+          filter: { id: existingDoc.id },
+          update: { $set: { status: 'REMOVED', last_checked: nowIso } },
+        },
+      });
 
-      await db.collection('data_changes').insertOne({
-        domain_id: domainId,
-        domain: record.domain,
-        entity_type: 'subdomain',
-        entity_id: existingDoc.id,
-        change_type: 'REMOVED',
-        old_value: existingDoc.subdomain,
-        detected_at: nowIso,
+      changeBulkOps.push({
+        insertOne: {
+          document: {
+            domain_id: domainId,
+            domain: record.domain,
+            entity_type: 'subdomain',
+            entity_id: existingDoc.id,
+            change_type: 'REMOVED',
+            old_value: existingDoc.subdomain,
+            detected_at: nowIso,
+          },
+        },
       });
     }
   }
@@ -156,42 +196,83 @@ export async function reconcileAndStoreResult(
   // Deduplicate all subdomains in memory
   const allSubdomainNames = Array.from(new Set([
     ...(record.subdomains || []),
-    ...existingSubDocs.map((s: any) => s.subdomain)
-  ]));
+    ...existingSubDocs.map((s: any) => s.subdomain),
+  ])).sort();
 
-  // 3. Emails Diff & Upsert
+  // Execute Subdomain Bulk Operations in single batch
+  if (subBulkOps.length > 0) {
+    try {
+      await db.collection('master_subdomains').bulkWrite(subBulkOps, { ordered: false });
+    } catch (bulkErr) {
+      console.warn('[Reconciliation] master_subdomains bulkWrite non-fatal warning:', bulkErr);
+    }
+  }
+
+  // 3. Emails Diff & Bulk Operations
   const existingEmailDocs = await db.collection('master_emails').find({ domain_id: domainId }).toArray();
   const existingEmailMap = new Map(existingEmailDocs.map((e: any) => [e.email, e]));
-  const crawledEmailSet = new Set(record.emails);
+  const emailBulkOps: any[] = [];
 
-  for (const email of record.emails) {
-    const emailId = generateEntityId('email', email);
-    if (!existingEmailMap.has(email)) {
+  for (const email of record.emails || []) {
+    const emailClean = email.trim().toLowerCase();
+    const emailId = generateEntityId('email', emailClean);
+    const emailBloomCheck = bloom.check(emailClean);
+
+    if (emailBloomCheck === 'DEFINITELY_NEW' || !existingEmailMap.has(emailClean)) {
       stats.new_emails++;
       stats.audit_changes_recorded++;
-      await db.collection('master_emails').updateOne(
-        { id: emailId },
-        {
-          $set: { domain_id: domainId, domain: record.domain, email, status: 'ACTIVE', last_seen: nowIso },
-          $setOnInsert: { first_seen: nowIso },
+      bloom.add(emailClean);
+
+      emailBulkOps.push({
+        updateOne: {
+          filter: { id: emailId },
+          update: {
+            $set: { domain_id: domainId, domain: record.domain, email: emailClean, status: 'ACTIVE', last_seen: nowIso },
+            $setOnInsert: { first_seen: nowIso },
+          },
+          upsert: true,
         },
-        { upsert: true }
-      );
-      await db.collection('data_changes').insertOne({
-        domain_id: domainId,
-        domain: record.domain,
-        entity_type: 'email',
-        entity_id: emailId,
-        change_type: 'NEW',
-        new_value: email,
-        detected_at: nowIso,
+      });
+
+      changeBulkOps.push({
+        insertOne: {
+          document: {
+            domain_id: domainId,
+            domain: record.domain,
+            entity_type: 'email',
+            entity_id: emailId,
+            change_type: 'NEW',
+            new_value: emailClean,
+            detected_at: nowIso,
+          },
+        },
       });
     } else {
       stats.existing_emails++;
-      await db.collection('master_emails').updateOne(
-        { id: emailId },
-        { $set: { status: 'ACTIVE', last_seen: nowIso } }
-      );
+      emailBulkOps.push({
+        updateOne: {
+          filter: { id: emailId },
+          update: { $set: { status: 'ACTIVE', last_seen: nowIso } },
+        },
+      });
+    }
+  }
+
+  // Execute Email Bulk Operations in batch
+  if (emailBulkOps.length > 0) {
+    try {
+      await db.collection('master_emails').bulkWrite(emailBulkOps, { ordered: false });
+    } catch (bulkErr) {
+      console.warn('[Reconciliation] master_emails bulkWrite non-fatal warning:', bulkErr);
+    }
+  }
+
+  // Execute Audit Change Log Bulk Operations in batch
+  if (changeBulkOps.length > 0) {
+    try {
+      await db.collection('data_changes').bulkWrite(changeBulkOps, { ordered: false });
+    } catch (bulkErr) {
+      console.warn('[Reconciliation] data_changes bulkWrite non-fatal warning:', bulkErr);
     }
   }
 

@@ -17,6 +17,7 @@ import { extractAndVerifyEmails } from './emailExtractor';
 import { extractPhoneNumbers } from './phoneExtractor';
 import { classifySite } from './siteClassifier';
 import { reconcileAndStoreResult } from './pipeline/reconciliation';
+import { generateEntityId } from '@/lib/entityId';
 import { connectMongo } from '../mongodb';
 
 /**
@@ -102,7 +103,7 @@ export async function crawlDomain(
 
   // Immediate Checkpoint 1 to MongoDB so UI updates within 1.5 seconds
   const checkpointRecord: ScrapedDomainRecord = {
-    id: `domain_${rootDomain}`,
+    id: generateEntityId('domain', rootDomain),
     domain: rootDomain,
     rootDomain,
     subdomain: startingHost,
@@ -369,7 +370,7 @@ export async function crawlDomain(
   const rankedEmailStrings = verifiedEmailsList.map((e) => e.email);
 
   const finalRecord: ScrapedDomainRecord = {
-    id: `domain_${rootDomain}`,
+    id: generateEntityId('domain', rootDomain),
     domain: rootDomain,
     rootDomain,
     subdomain: startingHost,

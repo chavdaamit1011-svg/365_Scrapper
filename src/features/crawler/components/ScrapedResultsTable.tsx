@@ -138,22 +138,45 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         rawEmailList.push(r.email);
       }
       const rankedEmails = rankAndFilterEmails(rawEmailList, domainKey);
+      const hasDiscoveredSubdomains = subList.length > 0 || (typeof r.subdomainCount === 'number' && r.subdomainCount > 0);
+      const isCurrentlyCrawling = r.status === 'CRAWLING';
 
       // Check if this record represents an offline, timed out, or inaccessible target
-      const isRecordOffline =
+      // A record is ONLY offline if it is NOT currently crawling, has NO subdomains discovered,
+      // and explicitly failed with a network or DNS error.
+      const isExplicitOfflineStatus =
         r.status === 'OFFLINE' ||
         r.status === 'UNREACHABLE' ||
         r.status === 'TIMED_OUT' ||
         r.status === 'DNS_ERROR' ||
         r.status === 'CONNECTION_REFUSED' ||
         r.status === 'SSL_ERROR' ||
-        (typeof r.status === 'string' && r.status.startsWith('HTTP_')) ||
-        (r.pagesCrawled === 0 && (!r.emails || r.emails.length === 0)) ||
-        (Array.isArray(r.crawledPages) && r.crawledPages.some((p) => (p.statusCode && p.statusCode >= 500) || p.title?.includes('Unreachable')));
+        (typeof r.status === 'string' && r.status.startsWith('HTTP_'));
 
-      const effectiveStatus = r.status && r.status !== 'OFFLINE' ? r.status : (isRecordOffline ? (r.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : r.errorCode === 'ERR_CONNECTION_TIMED_OUT' ? 'TIMED_OUT' : r.errorCode === 'ERR_CONNECTION_REFUSED' ? 'CONNECTION_REFUSED' : 'OFFLINE') : (r.status || 'RESOLVED'));
-      const effectiveCategory = isRecordOffline ? (r.errorTitle || (effectiveStatus === 'DNS_ERROR' ? 'DNS Resolution Failed' : effectiveStatus === 'TIMED_OUT' ? 'Connection Timed Out' : effectiveStatus === 'CONNECTION_REFUSED' ? 'Connection Refused' : 'Site Inaccessible')) : (r.category || 'Corporate & Business Services');
-      const effectiveSummary = isRecordOffline ? (r.summary || `${effectiveCategory} (${r.errorCode || effectiveStatus}). No live HTML content could be loaded.`) : (r.summary || '');
+      const isRecordOffline =
+        !isCurrentlyCrawling &&
+        !hasDiscoveredSubdomains &&
+        r.status !== 'RESOLVED' &&
+        (isExplicitOfflineStatus || Boolean(r.errorCode)) &&
+        (!r.crawledPages || r.crawledPages.length === 0 || r.crawledPages.every((p) => (p.statusCode && p.statusCode >= 500) || p.title?.includes('Unreachable')));
+
+      const effectiveStatus = isCurrentlyCrawling
+        ? 'CRAWLING'
+        : (hasDiscoveredSubdomains
+          ? (r.status && r.status !== 'OFFLINE' ? r.status : 'RESOLVED')
+          : (r.status && r.status !== 'OFFLINE' ? r.status : (isRecordOffline ? (r.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : r.errorCode === 'ERR_CONNECTION_TIMED_OUT' ? 'TIMED_OUT' : r.errorCode === 'ERR_CONNECTION_REFUSED' ? 'CONNECTION_REFUSED' : 'OFFLINE') : (r.status || 'RESOLVED'))));
+
+      const effectiveCategory = isRecordOffline
+        ? (r.errorTitle || (effectiveStatus === 'DNS_ERROR' ? 'DNS Resolution Failed' : effectiveStatus === 'TIMED_OUT' ? 'Connection Timed Out' : effectiveStatus === 'CONNECTION_REFUSED' ? 'Connection Refused' : 'Site Inaccessible'))
+        : (r.category && r.category !== 'Site Inaccessible' ? r.category : (hasDiscoveredSubdomains ? 'Public Domain Scope' : 'Corporate & Business Services'));
+
+      const effectiveCategoryIcon = isRecordOffline
+        ? '⚠️'
+        : (hasDiscoveredSubdomains && (!r.categoryIcon || r.categoryIcon === '⚠️') ? '🏛️' : (r.categoryIcon || '🌐'));
+
+      const effectiveSummary = isRecordOffline
+        ? (r.summary || `${effectiveCategory} (${r.errorCode || effectiveStatus}). No live HTML content could be loaded.`)
+        : (r.summary && !r.summary.includes('No live HTML content could be loaded') ? r.summary : (hasDiscoveredSubdomains ? `Public domain scope with ${subList.length} verified subdomains and SSL infrastructure.` : (r.summary || '')));
 
       // Collect crawled pages
       const rawPageList: CrawledPageDetail[] = [];
@@ -162,7 +185,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       } else if (r.sourceUrl && !isRecordOffline) {
         rawPageList.push({
           url: r.sourceUrl,
-          title: 'Root Scope Page',
+          title: hasDiscoveredSubdomains ? `${domainKey.toUpperCase()} Public Domain Scope` : 'Root Scope Page',
           statusCode: 200,
           depth: 0,
           timestamp: r.discoveredAt,
@@ -176,10 +199,10 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           domain: domainKey,
           status: effectiveStatus,
           category: effectiveCategory,
-          categoryIcon: isRecordOffline ? '⚠️' : (r.categoryIcon || '🌐'),
+          categoryIcon: effectiveCategoryIcon,
           summary: effectiveSummary,
-          errorCode: r.errorCode,
-          errorTitle: r.errorTitle,
+          errorCode: isRecordOffline ? r.errorCode : undefined,
+          errorTitle: isRecordOffline ? r.errorTitle : undefined,
           reconciliation: r.reconciliation,
           subdomains: Array.from(new Set(subList)),
           subdomainCount: subList.length,
@@ -187,7 +210,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           emails: rankedEmails,
           emailCount: rankedEmails.length,
           crawledPages: rawPageList,
-          pagesCrawled: isRecordOffline ? 0 : Math.max(r.pagesCrawled || 1, rawPageList.length || 1),
+          pagesCrawled: isRecordOffline ? 0 : Math.max(r.pagesCrawled || (hasDiscoveredSubdomains ? 1 : 0), rawPageList.length || (hasDiscoveredSubdomains ? 1 : 0)),
         });
       } else {
         // Merge subdomains, emails, and crawled pages
@@ -203,6 +226,13 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           if (r.errorTitle) existing.errorTitle = r.errorTitle;
           if (r.reconciliation) existing.reconciliation = r.reconciliation;
           existing.pagesCrawled = 0;
+        } else {
+          existing.status = effectiveStatus;
+          existing.category = effectiveCategory;
+          existing.categoryIcon = effectiveCategoryIcon;
+          if (effectiveSummary) existing.summary = effectiveSummary;
+          existing.errorCode = undefined;
+          existing.errorTitle = undefined;
         }
 
         if (rawPageList.length > 0) {
@@ -216,8 +246,10 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           }
           existing.crawledPages = mergedPages;
           if (!isRecordOffline) {
-            existing.pagesCrawled = Math.max(existing.pagesCrawled || 1, mergedPages.length);
+            existing.pagesCrawled = Math.max(existing.pagesCrawled || (hasDiscoveredSubdomains ? 1 : 0), mergedPages.length);
           }
+        } else if (hasDiscoveredSubdomains && (!existing.pagesCrawled || existing.pagesCrawled === 0)) {
+          existing.pagesCrawled = 1;
         }
 
         existing.subdomains = mergedSubs;
@@ -553,15 +585,18 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 const emails = r.emails || [];
                 const crawledPages = r.crawledPages || [];
                 const isCurrentlyCrawling = r.status === 'CRAWLING';
+                const hasSubs = subdomains.length > 0 || (typeof r.subdomainCount === 'number' && r.subdomainCount > 0);
                 const isOffline =
                   !isCurrentlyCrawling &&
+                  !hasSubs &&
+                  r.status !== 'RESOLVED' &&
                   (r.status === 'OFFLINE' ||
                     r.status === 'UNREACHABLE' ||
                     r.status === 'TIMED_OUT' ||
                     r.status === 'DNS_ERROR' ||
                     r.status === 'CONNECTION_REFUSED' ||
                     r.status === 'SSL_ERROR' ||
-                    (Boolean(r.errorCode) && r.pagesCrawled === 0 && (!r.subdomains || r.subdomains.length === 0)));
+                    (Boolean(r.errorCode) && r.pagesCrawled === 0));
 
                 return (
                   <React.Fragment key={r.id || idx}>
@@ -647,7 +682,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginTop: '3px' }}>
                                 <span style={{ color: '#0284c7', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                   <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#0284c7' }} />
-                                  {r.pagesCrawled && r.pagesCrawled > 0 ? `Crawling page ${r.pagesCrawled}...` : 'Discovering scope & subdomains...'}
+                                  {r.pagesCrawled && r.pagesCrawled > 0 ? `Crawling page ${r.pagesCrawled}...` : (hasSubs ? `Discovering scope & subdomains (${subdomains.length} found)...` : 'Discovering scope & subdomains...')}
                                 </span>
                                 <span>•</span>
                                 <span style={{ color: 'var(--text-muted)' }}>
@@ -682,7 +717,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                             ) : (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
                                 <span style={{ color: '#0369a1', fontWeight: 600 }}>
-                                  {r.categoryIcon || '🌐'} {r.category || 'Corporate'}
+                                  {r.categoryIcon || (hasSubs ? '🏛️' : '🌐')} {r.category || (hasSubs ? 'Public Domain Scope' : 'Corporate')}
                                 </span>
                                 <span>•</span>
                                 <button
@@ -705,7 +740,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   title="Click to view all crawled pages"
                                 >
                                   <FileText size={11} color={isExpanded ? '#0284c7' : '#64748b'} />
-                                  <span>{crawledPages.length > 0 ? `${crawledPages.length} pages` : (r.pagesCrawled ? `${r.pagesCrawled} pages` : '1 page')}</span>
+                                  <span>{crawledPages.length > 0 ? `${crawledPages.length} pages` : (r.pagesCrawled && r.pagesCrawled > 0 ? `${r.pagesCrawled} pages` : (hasSubs ? '1 page (scope)' : '1 page'))}</span>
                                 </button>
                               </div>
                             )}
@@ -889,16 +924,18 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
                         <Badge
                           variant={
-                            ['OFFLINE', 'UNREACHABLE', 'TIMED_OUT', 'DNS_ERROR', 'CONNECTION_REFUSED'].includes(r.status) || (typeof r.status === 'string' && r.status.startsWith('HTTP_'))
+                            isCurrentlyCrawling
+                              ? 'primary'
+                              : isOffline
                               ? 'danger'
                               : r.status === 'SSL_ERROR'
                               ? 'warning'
-                              : r.status === 'RESOLVED'
+                              : (r.status === 'RESOLVED' || hasSubs)
                               ? 'success'
                               : 'primary'
                           }
                         >
-                          {r.status || (isOffline ? 'OFFLINE' : 'RESOLVED')}
+                          {isCurrentlyCrawling ? 'CRAWLING' : (isOffline ? (r.status || 'OFFLINE') : 'RESOLVED')}
                         </Badge>
                       </td>
 
