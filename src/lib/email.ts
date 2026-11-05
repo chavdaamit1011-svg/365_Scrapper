@@ -1,8 +1,10 @@
 /**
  * ==============================================================================
- * The Scraper - Reusable Email Service for OTP Dispatch
+ * The Scrapper - Reusable Email Service for OTP Dispatch
  * ==============================================================================
  * Dispatches real 60-second verification OTP emails via Gmail SMTP.
+ * Built-in non-blocking timeout protection to ensure cloud instances (Render)
+ * never hang if outbound SMTP ports (465/587) are restricted by hosting firewalls.
  */
 
 import nodemailer from 'nodemailer';
@@ -23,6 +25,12 @@ export async function sendOtpEmail({
   const user = process.env.SMTP_USER || 'reactamit6@gmail.com';
   const pass = process.env.SMTP_PASS || 'qfbrxxdnrdfptnhi';
   const from = process.env.EMAIL_FROM || `"The Scrapper" <${user}>`;
+
+  // Always log OTP to server console for instant cloud operator access
+  console.log('================================================================');
+  console.log(`⚡ [AUTH OTP DISPATCH] Operator: ${username} (${to})`);
+  console.log(`⚡ [AUTH OTP CODE]: ${otp} (Valid: ${expirySeconds}s)`);
+  console.log('================================================================');
 
   const htmlBody = `
     <!DOCTYPE html>
@@ -76,9 +84,12 @@ export async function sendOtpEmail({
         user,
         pass,
       },
+      connectionTimeout: 3500, // 3.5s connect timeout
+      greetingTimeout: 2500,   // 2.5s greeting timeout
+      socketTimeout: 3500,     // 3.5s socket timeout
     });
 
-    const info = await transporter.sendMail({
+    const sendPromise = transporter.sendMail({
       from,
       to,
       subject: `[The Scrapper] ${otp} is your verification code (Expires in 60s)`,
@@ -86,15 +97,19 @@ export async function sendOtpEmail({
       html: htmlBody,
     });
 
-    console.log(`[Email] Real OTP email dispatched successfully to: ${to} (MessageID: ${info.messageId})`);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('SMTP timeout: network socket or cloud hosting port blocked')), 3800)
+    );
+
+    const info: any = await Promise.race([sendPromise, timeoutPromise]);
+    console.log(`[Email] Real OTP email dispatched successfully to: ${to} (MessageID: ${info?.messageId})`);
     return { success: true, preview: otp };
   } catch (err: any) {
-    console.error('[Email] Failed to send real email via Gmail SMTP:', err.message);
-    // Fallback info for dev console
+    console.warn(`[Email] SMTP warning (${err?.message || err}). Falling back to instant code preview.`);
     return {
       success: true,
       preview: otp,
-      error: err.message,
+      error: err?.message || 'SMTP timeout',
     };
   }
 }
