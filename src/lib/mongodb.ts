@@ -1,6 +1,52 @@
 import mongoose from 'mongoose';
 
-const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/the_scraper';
+/**
+ * Automatically sanitizes and repairs MongoDB connection strings:
+ * - URL-encodes special characters in passwords (e.g., 'Pass@1234' -> 'Pass%401234')
+ * - Ensures default database name exists (appends '/the_scraper' if missing)
+ * - Preserves query parameters
+ */
+export function sanitizeMongoUri(rawUri: string): string {
+  if (!rawUri) return 'mongodb://127.0.0.1:27017/the_scraper';
+  let str = rawUri.trim();
+  const protocolMatch = str.match(/^(mongodb(?:\+srv)?:\/\/)(.*)$/);
+  if (!protocolMatch) return str;
+
+  const protocol = protocolMatch[1];
+  const rest = protocolMatch[2];
+
+  const atIdx = rest.lastIndexOf('@');
+  if (atIdx === -1) return str;
+
+  const userinfo = rest.slice(0, atIdx);
+  let hostAndPath = rest.slice(atIdx + 1);
+
+  const colonIdx = userinfo.indexOf(':');
+  if (colonIdx === -1) return str;
+
+  const username = decodeURIComponent(userinfo.slice(0, colonIdx));
+  const password = decodeURIComponent(userinfo.slice(colonIdx + 1));
+
+  const slashIdx = hostAndPath.indexOf('/');
+  if (slashIdx === -1) {
+    const qIdx = hostAndPath.indexOf('?');
+    if (qIdx === -1) {
+      hostAndPath = hostAndPath + '/the_scraper?retryWrites=true&w=majority';
+    } else {
+      hostAndPath = hostAndPath.slice(0, qIdx) + '/the_scraper' + hostAndPath.slice(qIdx);
+    }
+  } else {
+    const afterSlash = hostAndPath.slice(slashIdx + 1);
+    if (!afterSlash || afterSlash.startsWith('?')) {
+      hostAndPath = hostAndPath.slice(0, slashIdx) + '/the_scraper' + (afterSlash.startsWith('?') ? afterSlash : '?retryWrites=true&w=majority');
+    }
+  }
+
+  return protocol + encodeURIComponent(username) + ':' + encodeURIComponent(password) + '@' + hostAndPath;
+}
+
+const rawUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/the_scraper';
+const MONGODB_URI = sanitizeMongoUri(rawUri);
 
 interface MongooseCache {
   conn: typeof mongoose | null;
@@ -34,17 +80,19 @@ export async function connectMongo(): Promise<typeof mongoose | null> {
       serverSelectionTimeoutMS: isCloudCluster ? 8000 : 2000,
     };
 
+    const maskedUri = MONGODB_URI.replace(/:([^@]+)@/, ':****@');
+
     cached.promise = mongoose
       .connect(MONGODB_URI, opts)
       .then((m) => {
         cached.isConnected = true;
-        console.log(`[MongoDB] Connected successfully to database: ${MONGODB_URI}`);
+        console.log(`[MongoDB] Connected successfully to database: ${maskedUri}`);
         return m;
       })
       .catch((err) => {
         cached.isConnected = false;
         cached.promise = null;
-        console.warn(`[MongoDB] Local MongoDB at ${MONGODB_URI} not reachable (${err.message}). Using persistent disk cache.`);
+        console.warn(`[MongoDB] Database at ${maskedUri} not reachable (${err.message}). Using persistent disk cache.`);
         return null;
       });
   }
