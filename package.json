@@ -5,8 +5,11 @@
   "scripts": {
     "dev": "next dev --webpack -p 3131",
     "build": "next build --webpack",
-    "start": "next start -p 3131",
+    "start": "next start",
     "lint": "next lint"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",

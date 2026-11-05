@@ -28,9 +28,10 @@ export async function connectMongo(): Promise<typeof mongoose | null> {
   }
 
   if (!cached.promise) {
+    const isCloudCluster = MONGODB_URI.includes('mongodb+srv') || !MONGODB_URI.includes('127.0.0.1');
     const opts = {
       bufferCommands: false,
-      serverSelectionTimeoutMS: 2000, // 2s quick timeout to prevent hanging if mongod is stopped
+      serverSelectionTimeoutMS: isCloudCluster ? 8000 : 2000,
     };
 
     cached.promise = mongoose
