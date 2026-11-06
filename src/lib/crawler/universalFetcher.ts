@@ -207,9 +207,37 @@ export async function fetchUniversal(
           contentType,
         };
       } catch (err2: any) {
-        return diagnoseNetworkError(err1, clean);
+        // Continue to www fallback
       }
     }
+
+    // Attempt 3: If apex domain failed, attempt www. prefix fallback
+    try {
+      const parsed = new URL(clean);
+      if (!parsed.hostname.startsWith('www.')) {
+        const wwwHttps = clean.replace(/^(https?:\/\/)/i, '$1www.');
+        try {
+          const resWww = await fetchWithRedirects(wwwHttps, timeoutMs);
+          return {
+            ok: resWww.statusCode >= 200 && resWww.statusCode < 400,
+            status: resWww.statusCode,
+            finalUrl: resWww.finalUrl,
+            html: resWww.html,
+            contentType: (resWww.headers['content-type'] as string) || 'text/html',
+          };
+        } catch {
+          const wwwHttp = wwwHttps.replace(/^https:\/\//i, 'http://');
+          const resWwwHttp = await fetchWithRedirects(wwwHttp, timeoutMs);
+          return {
+            ok: resWwwHttp.statusCode >= 200 && resWwwHttp.statusCode < 400,
+            status: resWwwHttp.statusCode,
+            finalUrl: resWwwHttp.finalUrl,
+            html: resWwwHttp.html,
+            contentType: (resWwwHttp.headers['content-type'] as string) || 'text/html',
+          };
+        }
+      }
+    } catch {}
 
     return diagnoseNetworkError(err1, clean);
   }

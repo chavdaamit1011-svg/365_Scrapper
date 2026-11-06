@@ -158,34 +158,72 @@ export async function crawlDomain(
 
   if (!rootFetchResult.ok) {
     if (allSubdomains.size > 0) {
-      // Apex host has no web server (e.g. gov.in, registry scope), BUT active subdomains were verified!
-      console.log(`[CrawlerEngine] Apex has no web server (${rootFetchResult.errorCode}), but discovered ${allSubdomains.size} active subdomains! Classifying as DOMAIN_SCOPE.`);
-      finalStatus = 'RESOLVED';
-      errorCode = null;
-      errorTitle = null;
+      console.log(`[CrawlerEngine] Apex URL did not respond directly (${rootFetchResult.errorCode}). Probing discovered subdomains for live landing page...`);
+      
+      // Check if any discovered subdomain (prioritizing www.) has a live website
+      const candidateSubs = Array.from(allSubdomains).slice(0, 6);
+      candidateSubs.sort((a, b) => (a.startsWith('www.') ? -1 : b.startsWith('www.') ? 1 : 0));
+      
+      let subFetchSuccess: any = null;
+      for (const candSub of candidateSubs) {
+        try {
+          const resCand = await fetchUniversal(`https://${candSub}`, Math.min(timeoutMs, 5000));
+          if (resCand.ok && resCand.html) {
+            subFetchSuccess = resCand;
+            console.log(`[CrawlerEngine] Discovered live responsive website on subdomain: https://${candSub} (HTTP ${resCand.status})`);
+            break;
+          }
+        } catch {}
+      }
 
-      const scopeTitle = `${startingHost.toUpperCase()} Public Domain Scope`;
-      const scopeSummary = `Apex host has no direct web server, but ${allSubdomains.size} live subdomains were discovered and mapped in this scope.`;
+      if (subFetchSuccess) {
+        siteIntel = classifySite(subFetchSuccess.html, startingHost);
+        finalStatus = 'RESOLVED';
+        errorCode = null;
+        errorTitle = null;
 
-      visitedRecords.push({
-        url: startUrl,
-        title: scopeTitle,
-        statusCode: 200,
-        depth: 0,
-        timestamp: new Date().toISOString(),
-      });
+        visitedRecords.push({
+          url: subFetchSuccess.finalUrl,
+          title: siteIntel.title,
+          statusCode: subFetchSuccess.status,
+          depth: 0,
+          timestamp: new Date().toISOString(),
+        });
 
-      siteIntel = {
-        title: scopeTitle,
-        metaDescription: scopeSummary,
-        category: 'Public Domain Scope',
-        categoryIcon: '🏛️',
-        summary: scopeSummary,
-        technologies: ['DNS Subdomain Registry'],
-        isEcommerce: false,
-        ecommerceSignals: [],
-        phones: [],
-      };
+        // Extract verified emails and phones from live subdomain
+        const subEmails = await extractAndVerifyEmails(subFetchSuccess.html, subFetchSuccess.finalUrl);
+        for (const em of subEmails) allEmails.set(em.email, em);
+        for (const ph of extractPhoneNumbers(subFetchSuccess.html)) allPhones.add(ph);
+      } else {
+        // Apex and subdomains are network/DNS only
+        console.log(`[CrawlerEngine] Apex and subdomains are network services only. Classifying domain scope.`);
+        finalStatus = 'RESOLVED';
+        errorCode = null;
+        errorTitle = null;
+
+        const scopeTitle = `${startingHost.toUpperCase()} Network & Domain Scope`;
+        const scopeSummary = `${startingHost} operates an active network scope with ${allSubdomains.size} discovered subdomains and SSL services.`;
+
+        visitedRecords.push({
+          url: startUrl,
+          title: scopeTitle,
+          statusCode: 200,
+          depth: 0,
+          timestamp: new Date().toISOString(),
+        });
+
+        siteIntel = {
+          title: scopeTitle,
+          metaDescription: scopeSummary,
+          category: 'Corporate & Business Services',
+          categoryIcon: '🌐',
+          summary: scopeSummary,
+          technologies: ['DNS / SSL Infrastructure'],
+          isEcommerce: false,
+          ecommerceSignals: [],
+          phones: [],
+        };
+      }
     } else {
       // Site is truly offline or unreachable on root URL with 0 subdomains
       console.log(`[CrawlerEngine] Root URL unreachable (${rootFetchResult.errorCode}): ${rootFetchResult.error}`);

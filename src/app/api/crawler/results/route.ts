@@ -41,6 +41,35 @@ export async function GET() {
       const hasDiscoveredScope = subCount > 0;
       const isOfflineStatus = ['OFFLINE', 'UNREACHABLE', 'TIMED_OUT', 'DNS_ERROR', 'CONNECTION_REFUSED', 'SSL_ERROR'].includes(status);
 
+      const isPlaceholderSummary =
+        !d.summary ||
+        d.summary.includes('Analyzing domain scope') ||
+        d.summary.includes('No live HTML content could be loaded');
+
+      const cleanSummary = !isPlaceholderSummary
+        ? d.summary
+        : (isOfflineStatus
+          ? (d.errorTitle ? `${d.errorTitle} (${d.errorCode || status}). Server did not respond.` : 'Site Inaccessible. Server did not respond within timeout limits.')
+          : (hasDiscoveredScope
+            ? `${d.domain} operates an active web presence with ${subCount} discovered subdomains and network infrastructure.`
+            : `${d.domain} corporate web services and domain operations.`));
+
+      const cleanCategory =
+        d.category &&
+        d.category !== 'Site Inaccessible' &&
+        d.category !== 'Discovering Domain Intelligence...' &&
+        d.category !== 'Public Domain Scope'
+          ? d.category
+          : (isOfflineStatus ? (d.errorTitle || 'Site Inaccessible') : 'Corporate & Business Services');
+
+      const cleanCategoryIcon =
+        d.categoryIcon &&
+        d.categoryIcon !== '⚠️' &&
+        d.categoryIcon !== '🔍' &&
+        d.categoryIcon !== '🏛️'
+          ? d.categoryIcon
+          : (isOfflineStatus ? '⚠️' : '🌐');
+
       return {
         id: d.id || String(d._id),
         domain: d.domain || '',
@@ -52,19 +81,13 @@ export async function GET() {
         emails: Array.isArray(d.emails) ? d.emails : (d.email ? [d.email] : []),
         verifiedEmails: Array.isArray(d.verifiedEmails) ? d.verifiedEmails : [],
         emailCount: typeof d.emailCount === 'number' ? d.emailCount : (Array.isArray(d.emails) ? d.emails.length : 0),
-        category: (d.category && d.category !== 'Site Inaccessible' && d.category !== 'Discovering Domain Intelligence...')
-          ? d.category
-          : (hasDiscoveredScope ? 'Public Domain Scope' : (isOfflineStatus ? (d.errorTitle || 'Site Inaccessible') : 'Corporate & Business Services')),
-        categoryIcon: (d.categoryIcon && d.categoryIcon !== '⚠️' && d.categoryIcon !== '🔍')
-          ? d.categoryIcon
-          : (hasDiscoveredScope ? '🏛️' : (isOfflineStatus ? '⚠️' : '🌐')),
+        category: cleanCategory,
+        categoryIcon: cleanCategoryIcon,
         isEcommerce: Boolean(d.isEcommerce),
         ecommerceSignals: Array.isArray(d.ecommerceSignals) ? d.ecommerceSignals : [],
         technologies: Array.isArray(d.technologies) ? d.technologies : [],
         phones: Array.isArray(d.phones) ? d.phones : [],
-        summary: (d.summary && !d.summary.includes('No live HTML content could be loaded'))
-          ? d.summary
-          : (hasDiscoveredScope ? `Public domain scope with ${subCount} verified subdomains.` : (d.summary || '')),
+        summary: cleanSummary,
         crawledPages: Array.isArray(d.crawledPages) ? d.crawledPages : [],
         country: d.country || 'Detected',
         countryCode: d.countryCode || 'INT',

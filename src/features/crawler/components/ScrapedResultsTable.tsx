@@ -166,17 +166,30 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           ? (r.status && r.status !== 'OFFLINE' ? r.status : 'RESOLVED')
           : (r.status && r.status !== 'OFFLINE' ? r.status : (isRecordOffline ? (r.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : r.errorCode === 'ERR_CONNECTION_TIMED_OUT' ? 'TIMED_OUT' : r.errorCode === 'ERR_CONNECTION_REFUSED' ? 'CONNECTION_REFUSED' : 'OFFLINE') : (r.status || 'RESOLVED'))));
 
+      const isAnalyzingPlaceholder =
+        !r.summary ||
+        r.summary.includes('Analyzing domain scope') ||
+        r.summary.includes('No live HTML content could be loaded');
+
       const effectiveCategory = isRecordOffline
         ? (r.errorTitle || (effectiveStatus === 'DNS_ERROR' ? 'DNS Resolution Failed' : effectiveStatus === 'TIMED_OUT' ? 'Connection Timed Out' : effectiveStatus === 'CONNECTION_REFUSED' ? 'Connection Refused' : 'Site Inaccessible'))
-        : (r.category && r.category !== 'Site Inaccessible' ? r.category : (hasDiscoveredSubdomains ? 'Public Domain Scope' : 'Corporate & Business Services'));
+        : (r.category && r.category !== 'Site Inaccessible' && r.category !== 'Discovering Domain Intelligence...' && r.category !== 'Public Domain Scope'
+          ? r.category
+          : 'Corporate & Business Services');
 
       const effectiveCategoryIcon = isRecordOffline
         ? '⚠️'
-        : (hasDiscoveredSubdomains && (!r.categoryIcon || r.categoryIcon === '⚠️') ? '🏛️' : (r.categoryIcon || '🌐'));
+        : (r.categoryIcon && r.categoryIcon !== '⚠️' && r.categoryIcon !== '🔍' && r.categoryIcon !== '🏛️'
+          ? r.categoryIcon
+          : '🌐');
 
       const effectiveSummary = isRecordOffline
         ? (r.summary || `${effectiveCategory} (${r.errorCode || effectiveStatus}). No live HTML content could be loaded.`)
-        : (r.summary && !r.summary.includes('No live HTML content could be loaded') ? r.summary : (hasDiscoveredSubdomains ? `Public domain scope with ${subList.length} verified subdomains and SSL infrastructure.` : (r.summary || '')));
+        : (!isAnalyzingPlaceholder
+          ? r.summary
+          : (hasDiscoveredSubdomains
+            ? `${domainKey} operates active web infrastructure with ${subList.length} verified subdomains and network services.`
+            : `${domainKey} corporate web services and domain operations.`));
 
       // Collect crawled pages
       const rawPageList: CrawledPageDetail[] = [];
@@ -185,7 +198,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       } else if (r.sourceUrl && !isRecordOffline) {
         rawPageList.push({
           url: r.sourceUrl,
-          title: hasDiscoveredSubdomains ? `${domainKey.toUpperCase()} Public Domain Scope` : 'Root Scope Page',
+          title: r.crawledPages?.[0]?.title || `${domainKey.toUpperCase()} Web Portal`,
           statusCode: 200,
           depth: 0,
           timestamp: r.discoveredAt,
@@ -717,7 +730,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                             ) : (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-muted)', marginTop: '3px' }}>
                                 <span style={{ color: '#0369a1', fontWeight: 600 }}>
-                                  {r.categoryIcon || (hasSubs ? '🏛️' : '🌐')} {r.category || (hasSubs ? 'Public Domain Scope' : 'Corporate')}
+                                  {r.categoryIcon || '🌐'} {r.category || 'Corporate & Business'}
                                 </span>
                                 <span>•</span>
                                 <button
