@@ -6,6 +6,7 @@ import {
   CrawlerExecutionState,
   CrawlerStats,
   ScrapedDataRecord,
+  ActiveWorkerSummary,
 } from '../types/crawler.types';
 
 const STORAGE_KEY_RESULTS = 'the_scrapper_scraped_results';
@@ -23,7 +24,7 @@ interface ActiveWorkerData {
 
 export function useCrawlerController(
   targets: TargetItem[],
-  onTargetCompleted?: (targetId: string) => void
+  onTargetStatusChange?: (targetId: string, status: 'pending' | 'crawling' | 'completed' | 'failed') => void
 ) {
   const [status, setStatus] = useState<CrawlerExecutionState>('IDLE');
   const [scrapedResults, setScrapedResults] = useState<ScrapedDataRecord[]>([]);
@@ -174,24 +175,25 @@ export function useCrawlerController(
 
     if (availableSlots <= 0) return;
 
-    if (targetsRef.current.length === 0) {
-      if (currentRunning === 0) {
+    // Find targets that have not yet started crawling
+    const pendingTargets = targetsRef.current.filter((t) => !t.status || t.status === 'pending');
+
+    if (pendingTargets.length === 0) {
+      if (currentRunning === 0 && targetsRef.current.length > 0) {
         setStatus('COMPLETED');
-        setActivePhase('All Domains Crawled Successfully');
+        setActivePhase('All Ingested Domains Crawled Successfully');
         setCurrentTargetName(null);
         setTargetSubProgress(100);
       }
       return;
     }
 
-    // Dequeue availableSlots targets
-    const toLaunch = targetsRef.current.slice(0, availableSlots);
-    targetsRef.current = targetsRef.current.slice(availableSlots);
-
-    // Notify queue table to remove these targets from the waiting list
+    // Launch up to availableSlots pending targets
+    const toLaunch = pendingTargets.slice(0, availableSlots);
     for (const t of toLaunch) {
-      if (onTargetCompleted) {
-        onTargetCompleted(t.id);
+      t.status = 'crawling';
+      if (onTargetStatusChange) {
+        onTargetStatusChange(t.id, 'crawling');
       }
     }
 
@@ -201,7 +203,7 @@ export function useCrawlerController(
     for (const target of toLaunch) {
       runWorker.current(target);
     }
-  }, [onTargetCompleted]);
+  }, [onTargetStatusChange]);
 
   // Worker Execution Loop for a single target
   runWorker.current = async (target: TargetItem) => {
@@ -299,6 +301,10 @@ export function useCrawlerController(
 
     // 3. Worker finished crawling this target
     activeWorkersRef.current.delete(target.id);
+    target.status = 'completed';
+    if (onTargetStatusChange) {
+      onTargetStatusChange(target.id, 'completed');
+    }
     setProcessedTargetsCount((prev) => prev + 1);
 
     // Refresh final database results
@@ -331,6 +337,15 @@ export function useCrawlerController(
         return;
       }
 
+      // If all targets are already marked completed and user clicks start, reset to pending
+      const hasPending = queueToUse.some((t) => !t.status || t.status === 'pending');
+      if (!hasPending && queueToUse.length > 0) {
+        for (const t of queueToUse) {
+          t.status = 'pending';
+          if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
+        }
+      }
+
       isCancelledRef.current = false;
       isPausedRef.current = false;
       setSessionTotal(activeWorkersRef.current.size + queueToUse.length);
@@ -339,7 +354,7 @@ export function useCrawlerController(
 
       dispatchWorkers();
     },
-    [dispatchWorkers]
+    [dispatchWorkers, onTargetStatusChange]
   );
 
   // ENQUEUE TARGETS: Adds to queue and immediately dispatches if worker slots are free!
@@ -456,6 +471,18 @@ export function useCrawlerController(
   );
   const databaseTotalCountries = new Set(scrapedResults.map((r) => r.country).filter(Boolean)).size;
 
+  const activeWorkersList: ActiveWorkerSummary[] = Array.from(activeWorkersRef.current.entries()).map(
+    ([id, w]) => ({
+      id,
+      domain: w.target.domain,
+      progress: w.progress,
+      pagesCrawled: w.pagesCrawled,
+      subdomainsCount: w.subdomainsCount,
+      emailsCount: w.emailsCount,
+      phase: w.phase,
+    })
+  );
+
   const stats: CrawlerStats = {
     totalTargets: effectiveTotal,
     processedTargets: status === 'COMPLETED' ? effectiveTotal : processedTargetsCount,
@@ -475,6 +502,7 @@ export function useCrawlerController(
     databaseTotalCountries,
     cycleCount,
     isContinuous: isContinuousMode,
+    activeWorkersList,
   };
 
   return {

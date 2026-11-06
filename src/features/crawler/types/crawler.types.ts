@@ -85,6 +85,16 @@ export interface ScrapedDataRecord {
   discoveredAt: string;
 }
 
+export interface ActiveWorkerSummary {
+  id: string;
+  domain: string;
+  progress: number;
+  pagesCrawled: number;
+  subdomainsCount: number;
+  emailsCount: number;
+  phase: string;
+}
+
 export interface CrawlerStats {
   totalTargets: number;
   processedTargets: number;
@@ -104,5 +114,6 @@ export interface CrawlerStats {
   databaseTotalCountries?: number;
   cycleCount?: number;
   isContinuous?: boolean;
+  activeWorkersList?: ActiveWorkerSummary[];
 }
 

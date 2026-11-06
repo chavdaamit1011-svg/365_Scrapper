@@ -48,9 +48,9 @@ export default function DashboardPage() {
   // View mode switcher: 'results' (Scraped Intelligence) vs 'queue' (Target Scope Queue)
   const [dataViewMode, setDataViewMode] = useState<'results' | 'queue'>('results');
 
-  const handleTargetCompleted = useCallback((targetId: string) => {
+  const handleTargetStatusChange = useCallback((targetId: string, newStatus: 'pending' | 'crawling' | 'completed' | 'failed') => {
     setTargets((prev) => {
-      const updated = prev.filter((t) => t.id !== targetId);
+      const updated = prev.map((t) => (t.id === targetId ? { ...t, status: newStatus } : t));
       try {
         localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
       } catch (e) {}
@@ -59,7 +59,7 @@ export default function DashboardPage() {
   }, []);
 
   // Crawler Controller Hook
-  const crawler = useCrawlerController(targets, handleTargetCompleted);
+  const crawler = useCrawlerController(targets, handleTargetStatusChange);
 
   // Determine whether crawler is actively working or paused
   const isScrapingActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
@@ -343,30 +343,18 @@ export default function DashboardPage() {
               existingTargets={targets}
             />
 
-            {/* Middle: Crawler Engine Command Center - ONLY SHOWN WHEN SCRAPING IS ACTIVE */}
-            <AnimatePresence>
-              {isScrapingActive && (
-                <motion.div
-                  initial={{ opacity: 0, height: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, height: 'auto', scale: 1 }}
-                  exit={{ opacity: 0, height: 0, scale: 0.98 }}
-                  transition={{ duration: 0.28, ease: [0.16, 1, 0.3, 1] }}
-                  style={{ overflow: 'hidden' }}
-                >
-                  <CrawlerControlBar
-                    status={crawler.status}
-                    stats={crawler.stats}
-                    onStart={crawler.startCrawler}
-                    onPause={crawler.pauseCrawler}
-                    onResume={crawler.resumeCrawler}
-                    onCancel={crawler.cancelCrawler}
-                    onClear={crawler.clearResults}
-                    hasTargets={targets.length > 0}
-                    hasResults={crawler.scrapedResults.length > 0}
-                  />
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {/* Middle: Crawler Engine Command Center - ALWAYS VISIBLE WITH FULL OPERATOR CONTROLS */}
+            <CrawlerControlBar
+              status={crawler.status}
+              stats={crawler.stats}
+              onStart={crawler.startCrawler}
+              onPause={crawler.pauseCrawler}
+              onResume={crawler.resumeCrawler}
+              onCancel={crawler.cancelCrawler}
+              onClear={crawler.clearResults}
+              hasTargets={targets.length > 0}
+              hasResults={crawler.scrapedResults.length > 0}
+            />
 
             {/* Bottom Section Switcher: Scraped Intelligence Stream vs Target Queue Scope */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>

@@ -274,29 +274,81 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
 
                     {/* Queue Status */}
                     <td style={{ padding: '12px 16px' }}>
-                      {isCrawling ? (
+                      {t.status === 'crawling' ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            padding: '3px 9px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#e0f2fe',
+                            color: '#0369a1',
+                            border: '1px solid #bae6fd',
+                          }}
+                        >
+                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#0284c7' }} />
+                          ⚡ CRAWLING (Active)
+                        </span>
+                      ) : t.status === 'completed' ? (
                         <span
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
                             gap: '4px',
-                            padding: '2px 8px',
+                            padding: '3px 9px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#dcfce7',
+                            color: '#15803d',
+                            border: '1px solid #bbf7d0',
+                          }}
+                        >
+                          ✓ COMPLETED (Saved)
+                        </span>
+                      ) : t.status === 'failed' ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 9px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#fee2e2',
+                            color: '#b91c1c',
+                            border: '1px solid #fecaca',
+                          }}
+                        >
+                          ⚠️ FAILED
+                        </span>
+                      ) : isCrawling ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 9px',
                             borderRadius: '9999px',
                             fontSize: '11px',
                             fontWeight: 600,
-                            background: idx === 0 ? '#fef3c7' : '#f1f5f9',
-                            color: idx === 0 ? '#b45309' : '#64748b',
-                            border: `1px solid ${idx === 0 ? '#fde68a' : '#e2e8f0'}`,
+                            background: '#fef3c7',
+                            color: '#b45309',
+                            border: '1px solid #fde68a',
                           }}
                         >
-                          {idx === 0 ? 'QUEUED (#1) • NEXT IN QUEUE' : `QUEUED (#${idx + 1}) • IN QUEUE`}
+                          ⏳ WAITING IN QUEUE
                         </span>
                       ) : (
                         <span
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
-                            padding: '2px 8px',
+                            padding: '3px 9px',
                             borderRadius: '9999px',
                             fontSize: '11px',
                             fontWeight: 600,
