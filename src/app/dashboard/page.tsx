@@ -354,8 +354,6 @@ export default function DashboardPage() {
               onClear={crawler.clearResults}
               hasTargets={targets.length > 0}
               hasResults={crawler.scrapedResults.length > 0}
-              isContinuous={crawler.isContinuousMode}
-              onToggleContinuous={() => crawler.setIsContinuousMode((prev) => !prev)}
             />
 
             {/* Bottom Section Switcher: Scraped Intelligence Stream vs Target Queue Scope */}

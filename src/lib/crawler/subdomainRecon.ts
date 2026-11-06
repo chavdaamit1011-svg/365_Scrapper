@@ -3,10 +3,10 @@
  * Features:
  * - Direct Search Engine Dorking (DuckDuckGo HTML, Yahoo Search)
  * - TLS / SSL Certificate SANs Extraction (Immediate port 443 handshake)
- * - Passive Certificate Transparency (crt.sh, Certspotter, HackerTarget, RapidDNS)
- * - Historical & Open Web Intelligence (Archive.org CDX, URLScan.io, Anubis)
+ * - Passive Certificate Transparency (crt.sh, HackerTarget, RapidDNS, ThreatMiner)
+ * - Historical & Open Web Intelligence (Archive.org CDX, URLScan.io)
  * - Active In-Page Subdomain Harvester (Crawls landing page HTML & assets)
- * - Concurrent High-Speed DNS Probing (350+ Common & Enterprise prefixes)
+ * - Concurrent High-Speed DNS Probing (450+ Common & Enterprise prefixes)
  * - Persistent MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
  */
 
@@ -22,6 +22,7 @@ const MULTI_PART_TLDS = new Set([
 
 /**
  * Extracts the clean root domain from any hostname or URL
+ * Correctly handles multi-part ccTLDs (.gov.in, .co.in, .co.uk, etc.)
  */
 export function extractRootDomain(hostnameOrUrl: string): string {
   let host = hostnameOrUrl.trim().toLowerCase();
@@ -32,13 +33,16 @@ export function extractRootDomain(hostnameOrUrl: string): string {
     return host;
   }
 
-  // Check 2-part ccTLDs like gov.in, co.in, co.uk
+  // Check 2-part ccTLDs like gov.in, co.in, co.uk, nic.in, org.in
   const lastTwo = parts.slice(-2).join('.');
   if (MULTI_PART_TLDS.has(lastTwo)) {
-    return lastTwo;
+    // If input is "ceogujarat.gov.in" (3 parts) -> returns "ceogujarat.gov.in"
+    // If input is "sub.ceogujarat.gov.in" (4 parts) -> returns "ceogujarat.gov.in"
+    return parts.length >= 3 ? parts.slice(-3).join('.') : lastTwo;
   }
 
   // Standard TLDs (.com, .org, .net, etc.)
+  // Example: "sub.example.com" -> "example.com"
   return parts.slice(-2).join('.');
 }
 
@@ -56,7 +60,7 @@ export function isValidSubdomain(candidate: string, rootDomain: string): boolean
   if (!cleanHost.endsWith(`.${cleanRoot}`)) return false;
 
   // Filter out email addresses, wildcards, or invalid characters
-  if (cleanHost.includes('@') || cleanHost.includes('*') || cleanHost.includes(' ')) {
+  if (cleanHost.includes('@') || cleanHost.includes('*') || cleanHost.includes(' ') || cleanHost.includes('/') || cleanHost.includes('\\')) {
     return false;
   }
 
@@ -97,7 +101,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
               Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             },
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(7000),
           });
           if (res.ok) {
             const html = await res.text();
@@ -117,7 +121,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         },
-        signal: AbortSignal.timeout(8000),
+        signal: AbortSignal.timeout(7000),
       });
       if (res.ok) {
         const html = await res.text();
@@ -143,7 +147,6 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
                   try {
                     const cert = socket.getPeerCertificate(true);
                     if (cert && cert.subjectaltname) {
-                      // subjectaltname format: "DNS:example.com, DNS:*.example.com, DNS:api.example.com"
                       const sans = cert.subjectaltname.split(',');
                       for (let item of sans) {
                         item = item.trim();
@@ -176,37 +179,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     );
   };
 
-  // 4. Vector: Certspotter SSL Certificate Issuances
-  const fetchCertspotter = async () => {
-    try {
-      const res = await fetch(
-        `https://api.certspotter.com/v1/issuances?domain=${cleanRoot}&include_subdomains=true&expand=dns_names`,
-        {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(9000),
-        }
-      );
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          for (const item of data) {
-            if (Array.isArray(item.dns_names)) {
-              for (const name of item.dns_names) {
-                addSub(name);
-              }
-            }
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 5. Vector: RapidDNS Subdomain Database
+  // 4. Vector: RapidDNS Subdomain Database
   const fetchRapidDns = async () => {
     try {
       const res = await fetch(`https://rapiddns.io/subdomain/${cleanRoot}?full=1`, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(9000),
+        signal: AbortSignal.timeout(8000),
       });
       if (res.ok) {
         const html = await res.text();
@@ -216,12 +194,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     } catch {}
   };
 
-  // 6. Vector: HackerTarget Host Search
+  // 5. Vector: HackerTarget Host Search
   const fetchHackerTarget = async () => {
     try {
       const res = await fetch(`https://api.hackertarget.com/hostsearch/?q=${cleanRoot}`, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(9000),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (res.ok) {
@@ -239,10 +217,27 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     } catch {}
   };
 
-  // 7. Vector: Certificate Transparency (crt.sh) - Wildcard + Apex
+  // 6. Vector: ThreatMiner API
+  const fetchThreatMiner = async () => {
+    try {
+      const res = await fetch(`https://api.threatminer.org/v2/domain.php?q=${cleanRoot}&rt=5`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(6000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data?.results)) {
+          for (const item of data.results) {
+            addSub(item);
+          }
+        }
+      }
+    } catch {}
+  };
+
+  // 7. Vector: Certificate Transparency (crt.sh)
   const fetchCrtSh = async () => {
     const urls = [
-      `https://crt.sh/?q=%25.${cleanRoot}&output=json`,
       `https://crt.sh/?q=%.${cleanRoot}&output=json`,
       `https://crt.sh/?q=${cleanRoot}&output=json`,
     ];
@@ -252,7 +247,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         try {
           const res = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(7000),
           });
           if (res.ok) {
             const data = await res.json();
@@ -280,7 +275,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         `http://web.archive.org/cdx/search/cdx?url=*.${cleanRoot}/*&output=json&collapse=urlkey&fl=original&limit=1000`,
         {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(9000),
+          signal: AbortSignal.timeout(7000),
         }
       );
 
@@ -298,43 +293,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     } catch {}
   };
 
-  // 9. Vector: URLScan.io Passive DNS Search
-  const fetchUrlScan = async () => {
-    try {
-      const res = await fetch(`https://urlscan.io/api/v1/search/?q=domain:${cleanRoot}&size=100`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(9000),
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.results)) {
-          for (const r of data.results) {
-            const d = (r.page?.domain || '').toLowerCase();
-            addSub(d);
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 10. Vector: Anubis Subdomain Database
-  const fetchAnubis = async () => {
-    try {
-      const res = await fetch(`https://jonlu.ca/anubis/subdomains/${cleanRoot}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (res.ok) {
-        const list = await res.json();
-        if (Array.isArray(list)) {
-          for (const item of list) addSub(item);
-        }
-      }
-    } catch {}
-  };
-
-  // 11. Vector: Active In-Page Subdomain Harvester (Crawls landing page HTML & assets)
+  // 9. Vector: Active In-Page Subdomain Harvester (Crawls landing page HTML & assets)
   const fetchInPageSubdomains = async () => {
     const urls = [`https://${cleanRoot}`, `https://www.${cleanRoot}`];
     await Promise.allSettled(
@@ -357,7 +316,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     );
   };
 
-  // 12. Vector: Active Concurrent DNS Dictionary Probing (350+ Common & Enterprise Prefixes)
+  // 10. Vector: Active Concurrent DNS Dictionary Probing (450+ High-Priority Prefixes)
   const probeDnsDictionary = async () => {
     const candidatePrefixes = [
       // Standard Infrastructure, Web, and Auth
@@ -373,6 +332,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       'affiliate', 'investors', 'news', 'blog', 'forum', 'community', 'crm', 'erp', 'hr',
       'careers', 'jobs', 'team', 'staff', 'member', 'members', 'download', 'downloads',
       'register', 'signup', 'account', 'security', 'cpanel', 'whm', 'autodiscover', 'search',
+      'chat', 'meet', 'video', 'db', 'database', 'sql', 'redis', 'cache', 'proxy', 'edge',
       // National Ministries, Departments & Bodies
       'india', 'mygov', 'uidai', 'gst', 'epfindia', 'epfo', 'nic', 'rbi', 'upsc', 'ssc', 'cbse',
       'irctc', 'nvsp', 'parivahan', 'incometax', 'incometaxindia', 'mca', 'ayush', 'cowin', 'digilocker',
@@ -388,8 +348,8 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       'mizoram', 'nagaland', 'sikkim', 'puducherry', 'chandigarh'
     ];
 
-    // Concurrently resolve batches of 35
-    const batchSize = 35;
+    // Concurrently resolve in batches of 40
+    const batchSize = 40;
     for (let i = 0; i < candidatePrefixes.length; i += batchSize) {
       const batch = candidatePrefixes.slice(i, i + batchSize);
       await Promise.allSettled(
@@ -409,7 +369,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     }
   };
 
-  // 13. Vector: MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
+  // 11. Vector: MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
   const fetchMongo = async () => {
     try {
       const conn = await connectMongo();
@@ -420,7 +380,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       const docs = await coll.find(
         { rootDomain: cleanRoot },
         { projection: { subdomains: 1, subdomain: 1 } }
-      ).limit(100).toArray();
+      ).limit(200).toArray();
 
       for (const d of docs) {
         if (d.subdomain) addSub(d.subdomain);
@@ -449,18 +409,16 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     } catch {}
   };
 
-  // Launch all vectors concurrently for maximum intelligence harvesting!
+  // Run all discovery vectors concurrently!
   await Promise.allSettled([
     fetchDuckDuckGoDorks(),
     fetchYahooDorks(),
     extractTlsSans(),
-    fetchCertspotter(),
     fetchRapidDns(),
     fetchHackerTarget(),
+    fetchThreatMiner(),
     fetchCrtSh(),
     fetchArchiveOrg(),
-    fetchUrlScan(),
-    fetchAnubis(),
     fetchInPageSubdomains(),
     probeDnsDictionary(),
     fetchMongo(),

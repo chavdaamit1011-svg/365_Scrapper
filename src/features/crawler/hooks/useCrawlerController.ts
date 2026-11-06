@@ -180,26 +180,21 @@ export function useCrawlerController(
 
     if (pendingTargets.length === 0) {
       if (currentRunning === 0 && targetsRef.current.length > 0) {
-        if (isContinuousMode) {
-          // Autonomous Continuous Crawling Loop: sweeps targets continuously
-          setActivePhase(`[Continuous Recon - Cycle #${cycleCount}] Sweep completed. Cooldown (5s) before next monitor cycle...`);
-          setTimeout(() => {
-            if (isCancelledRef.current || isPausedRef.current) return;
-            setCycleCount((prev) => prev + 1);
-            for (const t of targetsRef.current) {
-              t.status = 'pending';
-              if (onTargetStatusChange) {
-                onTargetStatusChange(t.id, 'pending');
-              }
-            }
-            dispatchWorkers();
-          }, 5000);
-        } else {
-          setStatus('COMPLETED');
-          setActivePhase('All Ingested Domains Crawled Successfully');
-          setCurrentTargetName(null);
-          setTargetSubProgress(100);
+        // Continuous by default: Engine NEVER terminates on its own!
+        // Only pauses or cancels when operator explicitly clicks Pause or Cancel.
+        setCycleCount((prev) => prev + 1);
+        setActivePhase(`⚡ Continuous Loop (Cycle #${cycleCount + 1}) - Re-scanning scope for live updates...`);
+        for (const t of targetsRef.current) {
+          t.status = 'pending';
+          if (onTargetStatusChange) {
+            onTargetStatusChange(t.id, 'pending');
+          }
         }
+        setTimeout(() => {
+          if (!isCancelledRef.current && !isPausedRef.current) {
+            dispatchWorkers();
+          }
+        }, 1200);
       }
       return;
     }

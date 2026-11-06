@@ -30,8 +30,6 @@ interface CrawlerControlBarProps {
   onClear: () => void;
   hasTargets: boolean;
   hasResults: boolean;
-  isContinuous?: boolean;
-  onToggleContinuous?: () => void;
 }
 
 export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
@@ -44,8 +42,6 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
   onClear,
   hasTargets,
   hasResults,
-  isContinuous = true,
-  onToggleContinuous,
 }) => {
   const formatTime = (totalSeconds: number) => {
     const mins = Math.floor(totalSeconds / 60);
@@ -81,9 +77,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 animation: 'pulse 1.2s infinite ease-in-out',
               }}
             />
-            {stats.cycleCount && stats.cycleCount > 1
-              ? `LIVE CONTINUOUS RECON (CYCLE #${stats.cycleCount})`
-              : 'CONTINUOUS CRAWLING ACTIVE'}
+            {`AUTONOMOUS CONTINUOUS CRAWLER RUNNING (CYCLE #${stats.cycleCount || 1})`}
           </span>
         );
       case 'PAUSED':
@@ -227,26 +221,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
 
         {/* Crawler Execution Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          {/* Continuous Recon Loop Toggle */}
-          {onToggleContinuous && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={onToggleContinuous}
-              leftIcon={<RefreshCw size={13} />}
-              style={{
-                borderColor: isContinuous ? '#bae6fd' : '#e2e8f0',
-                color: isContinuous ? '#0284c7' : '#64748b',
-                background: isContinuous ? '#f0f9ff' : '#ffffff',
-                fontWeight: 600,
-              }}
-              title="Toggle Continuous Multi-Cycle Autonomous Reconnaissance"
-            >
-              {isContinuous ? 'Continuous Loop: ON' : 'Continuous Loop: OFF'}
-            </Button>
-          )}
-
-          {/* Start or Resume */}
+          {/* Start Crawler */}
           {status === 'IDLE' || status === 'COMPLETED' || status === 'CANCELLED' ? (
             <Button
               variant="primary"
@@ -254,9 +229,9 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
               onClick={onStart}
               disabled={!hasTargets}
               leftIcon={<Play size={14} fill="currentColor" />}
-              title={!hasTargets ? 'Add targets first to start' : 'Start crawling targets'}
+              title={!hasTargets ? 'Add targets first to start' : 'Start continuous crawler'}
             >
-              Start Crawler
+              Start Continuous Crawler
             </Button>
           ) : null}
 
@@ -287,16 +262,16 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
             </Button>
           )}
 
-          {/* Cancel button */}
+          {/* Stop / Cancel button */}
           {(status === 'RUNNING' || status === 'PAUSED') && (
             <Button
               variant="danger"
               size="sm"
               onClick={onCancel}
               leftIcon={<Ban size={14} />}
-              title={hasTargets ? 'Cancel current domain and crawl next domain from queue' : 'Cancel active crawl'}
+              title="Stop continuous crawler immediately"
             >
-              {hasTargets ? 'Cancel & Next Domain' : 'Cancel Crawl'}
+              Stop Crawler
             </Button>
           )}
 
