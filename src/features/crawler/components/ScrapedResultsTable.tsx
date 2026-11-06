@@ -122,12 +122,27 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       const domainKey = (r.domain || r.rootDomain || r.subdomain || 'unknown').toLowerCase().trim();
       const existing = map.get(domainKey);
 
-      // Collect all valid subdomains (excluding the root domain itself)
+      // Collect all valid subdomains (excluding the root domain itself and stripping URL-encoded artifacts)
       const subList: string[] = [];
-      if (Array.isArray(r.subdomains) && r.subdomains.length > 0) {
-        subList.push(...r.subdomains.filter((s) => s && s.toLowerCase() !== domainKey));
-      } else if (r.subdomain && r.subdomain.toLowerCase() !== domainKey) {
-        subList.push(r.subdomain);
+      const rawSubs = Array.isArray(r.subdomains) && r.subdomains.length > 0
+        ? r.subdomains
+        : (r.subdomain ? [r.subdomain] : []);
+      for (const s of rawSubs) {
+        if (!s || typeof s !== 'string') continue;
+        let cleanSub = s.trim().toLowerCase();
+        try {
+          if (cleanSub.includes('%')) {
+            cleanSub = decodeURIComponent(cleanSub);
+          }
+        } catch {}
+        cleanSub = cleanSub.replace(/^[a-z0-9_-]+:\/\//i, '').replace(/^\/\//, '');
+        cleanSub = cleanSub.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
+        cleanSub = cleanSub.replace(/^\*\./, '').replace(/^\./, '');
+        cleanSub = cleanSub.split('/')[0].split('?')[0].split('#')[0].split(':')[0];
+        cleanSub = cleanSub.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
+        if (cleanSub && cleanSub !== domainKey && !cleanSub.startsWith('.') && !cleanSub.includes('@')) {
+          subList.push(cleanSub);
+        }
       }
 
       // Collect and rank all emails with corporate priority
@@ -193,7 +208,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         : (!isAnalyzingPlaceholder
           ? r.summary
           : (isCurrentlyCrawling && isCrawling
-            ? `⚡ Actively analyzing domain scope, SSL certificates, and discovered subdomains for ${domainKey}...`
+            ? `⚡ Continuous recon in progress: mapping verified subdomains and network services for ${domainKey}...`
             : (hasDiscoveredSubdomains
               ? `${domainKey} operates active web infrastructure with ${subList.length} verified subdomains and network services.`
               : `${domainKey} corporate web services and domain operations.`)));

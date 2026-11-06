@@ -9,7 +9,7 @@ export interface TargetItem {
   source: TargetSource;
   fileName?: string;
   addedAt: string;
-  status?: 'pending' | 'crawling' | 'completed' | 'failed';
+  status?: 'pending' | 'crawling' | 'completed' | 'failed' | 'cancelled' | 'paused';
 }
 
 export interface ParseResult {

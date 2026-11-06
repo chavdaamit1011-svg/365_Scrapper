@@ -208,6 +208,42 @@ export async function reconcileAndStoreResult(
     }
   }
 
+  // Also sync all discovered subdomains to MongoDB dorking_results for unified reconnaissance
+  if (record.subdomains && record.subdomains.length > 0) {
+    const dorkingBulkOps: any[] = [];
+    for (const sub of record.subdomains) {
+      const subClean = sub.trim().toLowerCase();
+      const dorkingId = generateEntityId('subdomain', subClean);
+      dorkingBulkOps.push({
+        updateOne: {
+          filter: { hostname: subClean },
+          update: {
+            $set: {
+              id: dorkingId,
+              hostname: subClean,
+              rootDomain: record.domain,
+              subdomain: subClean,
+              dnsStatus: 'RESOLVED',
+              sourceUrl: `https://${subClean}`,
+              searchProvider: 'Crawler Recon & Dorking Engine',
+              discoveredByQuery: `site:${record.domain}`,
+              lastSeen: nowIso,
+            },
+            $setOnInsert: { firstSeen: nowIso },
+          },
+          upsert: true,
+        },
+      });
+    }
+    if (dorkingBulkOps.length > 0) {
+      try {
+        await db.collection('dorking_results').bulkWrite(dorkingBulkOps, { ordered: false });
+      } catch (dorkErr) {
+        console.warn('[Reconciliation] dorking_results bulkWrite non-fatal warning:', dorkErr);
+      }
+    }
+  }
+
   // 3. Emails Diff & Bulk Operations
   const existingEmailDocs = await db.collection('master_emails').find({ domain_id: domainId }).toArray();
   const existingEmailMap = new Map(existingEmailDocs.map((e: any) => [e.email, e]));
@@ -299,11 +335,14 @@ export async function reconcileAndStoreResult(
   );
 
   // 5. Sync to primary dashboard collection: scraped_results (Zero duplicate subdomains)
+  const { id: recId, domain: recDomain, ...restRecord } = record;
   await db.collection('scraped_results').updateOne(
     { domain: record.domain },
     {
       $set: {
-        ...record,
+        ...restRecord,
+        id: record.id,
+        domain: record.domain,
         subdomains: allSubdomainNames,
         subdomainCount: allSubdomainNames.length,
         subdomainDetails,
@@ -311,8 +350,6 @@ export async function reconcileAndStoreResult(
         updatedAt: nowIso,
       },
       $setOnInsert: {
-        id: record.id,
-        domain: record.domain,
         createdAt: nowIso,
       },
     },

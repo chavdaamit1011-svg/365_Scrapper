@@ -6,6 +6,7 @@ import { redisQueue } from '@/lib/redisQueue';
 import { DorkingPersistenceService } from '@/modules/dorking/services/persistence';
 import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
 import { classifySite } from '@/lib/crawler/siteClassifier';
+import { cleanSubdomainCandidate } from '@/lib/crawler/subdomainRecon';
 
 export const dynamic = 'force-dynamic';
 
@@ -26,8 +27,20 @@ export async function GET() {
       .lean();
 
     const results = docs.map((d: any) => {
-      const subs = Array.isArray(d.subdomains) ? d.subdomains : (d.subdomain ? [d.subdomain] : []);
-      const subCount = typeof d.subdomainCount === 'number' ? d.subdomainCount : subs.length;
+      const rawSubs = Array.isArray(d.subdomains) ? d.subdomains : (d.subdomain ? [d.subdomain] : []);
+      const targetRoot = d.rootDomain || d.domain || '';
+      const subs = Array.from(
+        new Set(
+          rawSubs
+            .map((s: string) => {
+              if (!s || typeof s !== 'string') return '';
+              const cleaned = cleanSubdomainCandidate(s, targetRoot) || cleanSubdomainCandidate(s);
+              return cleaned || '';
+            })
+            .filter((s: string) => s && s.length > 0 && !s.startsWith('.') && s !== d.domain)
+        )
+      ).sort();
+      const subCount = subs.length;
       let status = d.status || 'RESOLVED';
 
       // Auto-heal orphaned 'CRAWLING' records if subdomains were already discovered

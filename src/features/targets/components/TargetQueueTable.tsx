@@ -10,18 +10,22 @@ import { TargetItem, TargetType } from '../types/target.types';
 
 interface TargetQueueTableProps {
   targets: TargetItem[];
+  activeTarget?: TargetItem | null;
   onRemoveTarget: (id: string) => void;
   onClearAll: () => void;
   onStartCrawler?: () => void;
   isCrawling?: boolean;
+  cycleCount?: number;
 }
 
 export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
   targets,
+  activeTarget,
   onRemoveTarget,
   onClearAll,
   onStartCrawler,
   isCrawling = false,
+  cycleCount = 1,
 }) => {
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | TargetType>('all');
@@ -202,6 +206,57 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
         </div>
       </div>
 
+      {/* Sequential Processing Active Domain Banner */}
+      {activeTarget && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '12px 18px',
+            background: '#f0f9ff',
+            border: '1px solid #bae6fd',
+            borderRadius: '10px',
+            marginBottom: '14px',
+            flexWrap: 'wrap',
+            gap: '10px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <span
+              style={{
+                width: '8px',
+                height: '8px',
+                borderRadius: '50%',
+                background: '#0284c7',
+                animation: 'pulse 1.2s infinite ease-in-out',
+              }}
+            />
+            <div>
+              <span style={{ fontSize: '13px', fontWeight: 700, color: '#0369a1' }}>
+                ⚡ Currently Processing Active Domain: {activeTarget.domain}
+              </span>
+              <p style={{ margin: '2px 0 0', fontSize: '11.5px', color: '#0284c7' }}>
+                Sequential Pipeline: Only 1 domain at a time. The queued domains below will run automatically one-by-one once this finishes.
+              </p>
+            </div>
+          </div>
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              color: '#0369a1',
+              background: '#e0f2fe',
+              padding: '3px 10px',
+              borderRadius: '9999px',
+              border: '1px solid #bae6fd',
+            }}
+          >
+            {filtered.length} Domains in Line
+          </span>
+        </div>
+      )}
+
       {/* Targets Table */}
       <div
         style={{
@@ -228,9 +283,11 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={7} style={{ padding: '40px 18px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                    {targets.length === 0
-                      ? 'No targets ingested yet. Enter domains manually or upload a CSV / Excel file above.'
-                      : 'No loaded targets match your search.'}
+                    {activeTarget
+                      ? `⚡ Currently crawling ${activeTarget.domain}. Queue is empty (0 upcoming domains waiting).`
+                      : targets.length === 0
+                      ? 'No targets in queue. Enter domains manually or upload a CSV / Excel file above to start.'
+                      : 'No queued targets match your search.'}
                   </td>
                 </tr>
               ) : (
@@ -289,8 +346,16 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                             border: '1px solid #bae6fd',
                           }}
                         >
-                          <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#0284c7' }} />
-                          ⚡ CRAWLING (Active)
+                          <span
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              background: '#0284c7',
+                              animation: 'pulse 1.2s infinite ease-in-out',
+                            }}
+                          />
+                          ⚡ CRAWLING (Cycle #{cycleCount || 1})
                         </span>
                       ) : t.status === 'completed' ? (
                         <span
@@ -307,7 +372,41 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                             border: '1px solid #bbf7d0',
                           }}
                         >
-                          ✓ COMPLETED (Saved)
+                          ✓ CYCLE COMPLETED
+                        </span>
+                      ) : t.status === 'paused' ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 9px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#fef3c7',
+                            color: '#92400e',
+                            border: '1px solid #fde68a',
+                          }}
+                        >
+                          ⏸ PAUSED
+                        </span>
+                      ) : t.status === 'cancelled' ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '4px',
+                            padding: '3px 9px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#ffe4e6',
+                            color: '#be123c',
+                            border: '1px solid #fecdd3',
+                          }}
+                        >
+                          ⊘ STOPPED
                         </span>
                       ) : t.status === 'failed' ? (
                         <span
@@ -327,22 +426,41 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                           ⚠️ FAILED
                         </span>
                       ) : isCrawling ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '3px 9px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 600,
-                            background: '#fef3c7',
-                            color: '#b45309',
-                            border: '1px solid #fde68a',
-                          }}
-                        >
-                          ⏳ WAITING IN QUEUE
-                        </span>
+                        idx === 0 ? (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '3px 9px',
+                              borderRadius: '9999px',
+                              fontSize: '11px',
+                              fontWeight: 700,
+                              background: '#e0f2fe',
+                              color: '#0369a1',
+                              border: '1px solid #bae6fd',
+                            }}
+                          >
+                            ⏳ NEXT IN LINE (Starts next)
+                          </span>
+                        ) : (
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '3px 9px',
+                              borderRadius: '9999px',
+                              fontSize: '11px',
+                              fontWeight: 600,
+                              background: '#f1f5f9',
+                              color: '#475569',
+                              border: '1px solid #e2e8f0',
+                            }}
+                          >
+                            {`⏳ QUEUED (#${idx + 1} in queue)`}
+                          </span>
+                        )
                       ) : (
                         <span
                           style={{
@@ -357,7 +475,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                             border: '1px solid #e2e8f0',
                           }}
                         >
-                          READY
+                          READY IN QUEUE
                         </span>
                       )}
                     </td>

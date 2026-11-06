@@ -10,7 +10,7 @@ import {
   CrawledPageDetail,
   VerifiedEmailDetail,
 } from './types';
-import { extractRootDomain, discoverAllSubdomains, isValidSubdomain } from './subdomainRecon';
+import { extractRootDomain, discoverAllSubdomains, isValidSubdomain, extractSubdomainsFromText, cleanSubdomainCandidate } from './subdomainRecon';
 import { fetchUniversal } from './universalFetcher';
 import { extractLinksAndSubdomains, getUrlPriority } from './linkExtractor';
 import { extractAndVerifyEmails } from './emailExtractor';
@@ -19,6 +19,7 @@ import { classifySite } from './siteClassifier';
 import { reconcileAndStoreResult } from './pipeline/reconciliation';
 import { generateEntityId } from '@/lib/entityId';
 import { connectMongo } from '../mongodb';
+import { DorkingDiscoveryEngine } from '@/modules/dorking/engine/discoveryEngine';
 
 /**
  * Detects country name, ISO code, and emoji flag based on hostname
@@ -93,11 +94,22 @@ export async function crawlDomain(
   const visitedUrls = new Set<string>();
   const queuedUrls = new Set<string>();
 
-  // Step 1: Multi-Source Subdomain Reconnaissance (crt.sh, urlscan, archive.org, DNS dictionary)
-  console.log(`[CrawlerEngine] Launching concurrent subdomain enumeration for root: ${rootDomain}`);
+  const addSubdomainToScope = (cand: string) => {
+    const cleaned = cleanSubdomainCandidate(cand, rootDomain);
+    if (cleaned) {
+      allSubdomains.add(cleaned);
+    }
+  };
+
+  // Step 1: Combined Multi-Source Subdomain Reconnaissance & Real Search Dorking
+  console.log(`[CrawlerEngine] Launching concurrent subdomain enumeration & search dorking for root: ${rootDomain}`);
+  try {
+    DorkingDiscoveryEngine.getInstance().startJob({ domain: rootDomain }).catch(() => {});
+  } catch {}
+
   const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain);
   for (const s of discoveredSubdomainsList) {
-    allSubdomains.add(s);
+    addSubdomainToScope(s);
   }
   console.log(`[CrawlerEngine] Total OSINT subdomains discovered: ${allSubdomains.size}`);
 
@@ -191,10 +203,11 @@ export async function crawlDomain(
           timestamp: new Date().toISOString(),
         });
 
-        // Extract verified emails and phones from live subdomain
+        // Extract verified emails, phones, and subdomains from live subdomain
         const subEmails = await extractAndVerifyEmails(subFetchSuccess.html, subFetchSuccess.finalUrl);
         for (const em of subEmails) allEmails.set(em.email, em);
         for (const ph of extractPhoneNumbers(subFetchSuccess.html)) allPhones.add(ph);
+        for (const sub of extractSubdomainsFromText(subFetchSuccess.html, rootDomain)) addSubdomainToScope(sub);
       } else {
         // Apex and subdomains are network/DNS only
         console.log(`[CrawlerEngine] Apex and subdomains are network services only. Classifying domain scope.`);
@@ -294,10 +307,13 @@ export async function crawlDomain(
 
     const queue: QueueItem[] = [];
 
-    // Extract initial links
+    // Extract initial links and subdomains
     const rootLinks = extractLinksAndSubdomains(rootFetchResult.html, rootFetchResult.finalUrl, startingHost);
     for (const sub of rootLinks.discoveredSubdomains) {
-      allSubdomains.add(sub);
+      addSubdomainToScope(sub);
+    }
+    for (const sub of extractSubdomainsFromText(rootFetchResult.html, rootDomain)) {
+      addSubdomainToScope(sub);
     }
 
     for (const link of rootLinks.internalUrls) {
@@ -379,7 +395,10 @@ export async function crawlDomain(
       if (current.depth < maxDepth) {
         const pageLinks = extractLinksAndSubdomains(pageRes.html, pageRes.finalUrl, startingHost);
         for (const sub of pageLinks.discoveredSubdomains) {
-          allSubdomains.add(sub);
+          addSubdomainToScope(sub);
+        }
+        for (const sub of extractSubdomainsFromText(pageRes.html, rootDomain)) {
+          addSubdomainToScope(sub);
         }
 
         for (const nextLink of pageLinks.internalUrls) {

@@ -48,7 +48,7 @@ export default function DashboardPage() {
   // View mode switcher: 'results' (Scraped Intelligence) vs 'queue' (Target Scope Queue)
   const [dataViewMode, setDataViewMode] = useState<'results' | 'queue'>('results');
 
-  const handleTargetStatusChange = useCallback((targetId: string, newStatus: 'pending' | 'crawling' | 'completed' | 'failed') => {
+  const handleTargetStatusChange = useCallback((targetId: string, newStatus: NonNullable<TargetItem['status']>) => {
     setTargets((prev) => {
       const updated = prev.map((t) => (t.id === targetId ? { ...t, status: newStatus } : t));
       try {
@@ -62,10 +62,7 @@ export default function DashboardPage() {
   const crawler = useCrawlerController(targets, handleTargetStatusChange);
 
   // Determine whether crawler workers are actively running or paused
-  const isAnyWorkerActive =
-    crawler.status === 'RUNNING' ||
-    crawler.status === 'PAUSED' ||
-    (Array.isArray(crawler.stats.activeWorkersList) && crawler.stats.activeWorkersList.length > 0);
+  const isAnyWorkerActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
   const isScrapingActive = isAnyWorkerActive;
 
   useEffect(() => {
@@ -509,14 +506,16 @@ export default function DashboardPage() {
               />
             )}
 
-            {/* View Mode 2: Ingested Target Queue Table */}
+            {/* View Mode 2: Ingested Target Queue Table (Strictly Upcoming Sequential Queue) */}
             {dataViewMode === 'queue' && (
               <TargetQueueTable
                 targets={targets}
+                activeTarget={targets.find((t) => t.status === 'crawling') || null}
                 onRemoveTarget={handleRemoveTarget}
                 onClearAll={handleClearTargets}
                 onStartCrawler={() => crawler.startCrawler()}
                 isCrawling={isScrapingActive}
+                cycleCount={crawler.stats.cycleCount || 1}
               />
             )}
           </div>

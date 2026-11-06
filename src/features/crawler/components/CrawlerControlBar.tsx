@@ -77,7 +77,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 animation: 'pulse 1.2s infinite ease-in-out',
               }}
             />
-            {`AUTONOMOUS CONTINUOUS CRAWLER RUNNING (CYCLE #${stats.cycleCount || 1})`}
+            {stats.currentTargetName ? `PROCESSING: ${stats.currentTargetName}` : 'SEQUENTIAL CRAWLER ACTIVE'}
           </span>
         );
       case 'PAUSED':
@@ -307,8 +307,22 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
               {stats.progressPercent}% Completed
             </span>
             <span>•</span>
+            <span
+              style={{
+                fontSize: '11px',
+                fontWeight: 700,
+                color: '#0369a1',
+                background: '#e0f2fe',
+                padding: '2px 8px',
+                borderRadius: '6px',
+                border: '1px solid #bae6fd',
+              }}
+            >
+              Cycle #{stats.cycleCount || 1}
+            </span>
+            <span>•</span>
             <span>
-              {stats.processedTargets} of {stats.totalTargets} targets processed
+              {stats.processedTargets} processed
             </span>
             {stats.currentTargetName && (
               <>
