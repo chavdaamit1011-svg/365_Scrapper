@@ -22,6 +22,8 @@ dist/
 .screpper-data.json
 .screpper-scraped.json
 .screpper-redis-queue.json
+.screpper-dorking-data.json
+.screpper*.json
 the_scraper_scraped_results*
 *.db
 *.sqlite

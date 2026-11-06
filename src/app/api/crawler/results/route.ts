@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { connectMongo, MongoScrapedResultModel } from '@/lib/mongodb';
 import { redisQueue } from '@/lib/redisQueue';
+import { DorkingPersistenceService } from '@/modules/dorking/services/persistence';
+import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
 
 export const dynamic = 'force-dynamic';
 
@@ -89,47 +91,65 @@ export async function GET() {
 }
 
 export async function DELETE() {
-  try {
-    const mongoose = await connectMongo();
-    if (!mongoose || mongoose.connection.readyState !== 1) {
-      return NextResponse.json(
-        { success: false, message: 'MongoDB service not connected' },
-        { status: 503 }
-      );
-    }
+  let deletedCount = 0;
+  let mongoConnected = false;
 
-    // 1. Wipe all collections in MongoDB (Component 5 & Phase 2 tables)
-    const db = mongoose.connection.db;
-    let deletedCount = 0;
-    if (db) {
-      const collections = [
-        'scraped_results',
-        'raw_crawl_data',
-        'master_domains',
-        'master_subdomains',
-        'master_emails',
-        'data_changes',
-      ];
-      for (const collName of collections) {
-        try {
-          const res = await db.collection(collName).deleteMany({});
-          if (collName === 'scraped_results') {
-            deletedCount = res.deletedCount || 0;
+  try {
+    // 1. Wipe intelligence collections in MongoDB if connected
+    try {
+      const mongoose = await connectMongo();
+      if (mongoose && mongoose.connection.readyState === 1 && mongoose.connection.db) {
+        mongoConnected = true;
+        const db = mongoose.connection.db;
+        const collections = [
+          'scraped_results',
+          'raw_crawl_data',
+          'master_domains',
+          'master_subdomains',
+          'master_emails',
+          'data_changes',
+          'dorking_jobs',
+          'dorking_results',
+          'crawl_jobs',
+        ];
+
+        for (const collName of collections) {
+          try {
+            const res = await db.collection(collName).deleteMany({});
+            if (collName === 'scraped_results') {
+              deletedCount += res.deletedCount || 0;
+            }
+          } catch (e) {
+            console.warn(`[API] Failed to clear collection ${collName}:`, e);
           }
-        } catch (e) {
-          console.warn(`[API] Failed to clear collection ${collName}:`, e);
         }
       }
+    } catch (mongoErr: any) {
+      console.warn('[API/Crawler Results] Mongo clear warning:', mongoErr?.message);
     }
 
-    // 2. Clear Redis Queue & Fallback Queue file (Component 2)
+    // 2. Clear Redis Queue & Fallback Queue file
     try {
       await redisQueue.clearQueue();
     } catch (e) {
       console.warn('[API] Failed to clear Redis queue:', e);
     }
 
-    // 3. Clear SQLite relational master database (Phase 2 Master)
+    // 3. Clear Dorking engine state and cache
+    try {
+      await DorkingPersistenceService.clearAll();
+    } catch (e) {
+      console.warn('[API] Failed to clear Dorking data:', e);
+    }
+
+    // 4. Reset in-memory Bloom Filter bit array
+    try {
+      getSharedBloomFilter().clear();
+    } catch (e) {
+      console.warn('[API] Failed to clear Bloom Filter:', e);
+    }
+
+    // 5. Clear SQLite relational master database
     try {
       const sqlitePath = path.join(process.cwd(), 'crawler_engine', 'storage', 'master_relational.db');
       if (fs.existsSync(sqlitePath)) {
@@ -139,7 +159,7 @@ export async function DELETE() {
       console.warn('[API] Failed to unlink sqlite db:', e);
     }
 
-    // 4. Clear local crawler output files (JSON and CSV in output/ directories)
+    // 5. Clear local crawler output files (JSON and CSV in output/ directories)
     try {
       const outputDir = path.join(process.cwd(), 'crawler_engine', 'output');
       if (fs.existsSync(outputDir)) {
@@ -160,8 +180,13 @@ export async function DELETE() {
       console.warn('[API] Failed to clean crawler output:', e);
     }
 
-    // 5. Clean local disk cache files
-    for (const fName of ['.screpper-scraped.json', '.screpper-redis-queue.json']) {
+    // 6. Clean all local disk cache files
+    const diskCaches = [
+      '.screpper-scraped.json',
+      '.screpper-redis-queue.json',
+      '.screpper-dorking-data.json',
+    ];
+    for (const fName of diskCaches) {
       try {
         const p = path.join(process.cwd(), fName);
         if (fs.existsSync(p)) {
@@ -172,12 +197,12 @@ export async function DELETE() {
 
     return NextResponse.json({
       success: true,
-      message: `Complete purge successful: Deleted ${deletedCount} records and wiped all caches, queues, and history files.`,
+      message: `Complete purge successful: Deleted ${deletedCount} records and wiped all caches, queues, and history files.${mongoConnected ? ' (MongoDB Cleared)' : ' (Local Storage Cleared)'}`,
     });
   } catch (error: any) {
-    console.error('[API/Crawler Results] Error clearing MongoDB:', error);
+    console.error('[API/Crawler Results] Error clearing data:', error);
     return NextResponse.json(
-      { success: false, message: error.message || 'Failed to clear MongoDB results' },
+      { success: false, message: error.message || 'Failed to clear data' },
       { status: 500 }
     );
   }

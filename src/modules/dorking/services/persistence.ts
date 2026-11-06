@@ -380,5 +380,26 @@ export class DorkingPersistenceService {
       providerStats,
     };
   }
+
+  /**
+   * Complete wipe of all dorking jobs, records, and cache files
+   */
+  static async clearAll(): Promise<void> {
+    this.fallbackData = { jobs: [], records: [] };
+    this.saveFallback();
+    try {
+      if (fs.existsSync(DORKING_STORAGE_FILE)) {
+        fs.unlinkSync(DORKING_STORAGE_FILE);
+      }
+    } catch {}
+
+    try {
+      const conn = await connectMongo();
+      if (conn?.connection?.db) {
+        await conn.connection.db.collection('dorking_jobs').deleteMany({});
+        await conn.connection.db.collection('dorking_results').deleteMany({});
+      }
+    } catch {}
+  }
 }
 

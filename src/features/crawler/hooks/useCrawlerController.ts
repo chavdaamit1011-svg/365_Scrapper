@@ -389,22 +389,46 @@ export function useCrawlerController(
     setTargetSubProgress(0);
   }, []);
 
-  // CLEAR RESULTS
-  const clearResults = useCallback(() => {
+  // CLEAR RESULTS: Completely wipes React state, browser localStorage, MongoDB collections, and disk caches
+  const clearResults = useCallback(async () => {
     if (status === 'RUNNING') {
       alert('Please pause or cancel the crawler before clearing results.');
       return;
     }
 
+    // 1. Immediately wipe all in-memory states
     setScrapedResults([]);
     setElapsedSeconds(0);
     setSessionTotal(0);
     setProcessedTargetsCount(0);
     setActiveTargetResult(null);
-    setActivePhase('Standby');
+    setCurrentTargetName(null);
+    setTargetSubProgress(0);
+    setStatus('IDLE');
+    setActivePhase('Purging Database & Caches...');
+    activeWorkersRef.current.clear();
+    targetsRef.current = [];
+
+    // 2. Clear all browser localStorage and sessionStorage caches
     try {
       localStorage.removeItem(STORAGE_KEY_RESULTS);
+      localStorage.removeItem('the_scrapper_targets_queue');
+      sessionStorage.clear();
     } catch (e) {}
+
+    // 3. Trigger permanent purge in MongoDB, Redis, Dorking & disk JSON
+    try {
+      const res = await fetch('/api/crawler/results', { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        setActivePhase('Database & All Caches Purged Successfully');
+      } else {
+        setActivePhase('Standby');
+      }
+    } catch (e) {
+      console.warn('Backend purge error:', e);
+      setActivePhase('Standby');
+    }
   }, [status]);
 
   // Calculate dynamic progress
