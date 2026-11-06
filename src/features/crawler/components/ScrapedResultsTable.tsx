@@ -171,25 +171,32 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         r.summary.includes('Analyzing domain scope') ||
         r.summary.includes('No live HTML content could be loaded');
 
+      const isGov = domainKey.endsWith('.gov.in') || domainKey.endsWith('.nic.in') || domainKey.endsWith('.gov') || domainKey.endsWith('.mil');
+
+      const defaultCategory = isGov ? 'Government & Public Administration' : 'Corporate & Business Services';
+      const defaultIcon = isGov ? '🏛️' : '🌐';
+
       const effectiveCategory = isRecordOffline
         ? (r.errorTitle || (effectiveStatus === 'DNS_ERROR' ? 'DNS Resolution Failed' : effectiveStatus === 'TIMED_OUT' ? 'Connection Timed Out' : effectiveStatus === 'CONNECTION_REFUSED' ? 'Connection Refused' : 'Site Inaccessible'))
         : (r.category && r.category !== 'Site Inaccessible' && r.category !== 'Discovering Domain Intelligence...' && r.category !== 'Public Domain Scope'
           ? r.category
-          : 'Corporate & Business Services');
+          : defaultCategory);
 
       const effectiveCategoryIcon = isRecordOffline
         ? '⚠️'
-        : (r.categoryIcon && r.categoryIcon !== '⚠️' && r.categoryIcon !== '🔍' && r.categoryIcon !== '🏛️'
+        : (r.categoryIcon && r.categoryIcon !== '⚠️' && r.categoryIcon !== '🔍' && r.category !== 'Public Domain Scope'
           ? r.categoryIcon
-          : '🌐');
+          : defaultIcon);
 
       const effectiveSummary = isRecordOffline
         ? (r.summary || `${effectiveCategory} (${r.errorCode || effectiveStatus}). No live HTML content could be loaded.`)
         : (!isAnalyzingPlaceholder
           ? r.summary
-          : (hasDiscoveredSubdomains
-            ? `${domainKey} operates active web infrastructure with ${subList.length} verified subdomains and network services.`
-            : `${domainKey} corporate web services and domain operations.`));
+          : (isCurrentlyCrawling && isCrawling
+            ? `⚡ Actively analyzing domain scope, SSL certificates, and discovered subdomains for ${domainKey}...`
+            : (hasDiscoveredSubdomains
+              ? `${domainKey} operates active web infrastructure with ${subList.length} verified subdomains and network services.`
+              : `${domainKey} corporate web services and domain operations.`)));
 
       // Collect crawled pages
       const rawPageList: CrawledPageDetail[] = [];

@@ -180,10 +180,26 @@ export function useCrawlerController(
 
     if (pendingTargets.length === 0) {
       if (currentRunning === 0 && targetsRef.current.length > 0) {
-        setStatus('COMPLETED');
-        setActivePhase('All Ingested Domains Crawled Successfully');
-        setCurrentTargetName(null);
-        setTargetSubProgress(100);
+        if (isContinuousMode) {
+          // Autonomous Continuous Crawling Loop: sweeps targets continuously
+          setActivePhase(`[Continuous Recon - Cycle #${cycleCount}] Sweep completed. Cooldown (5s) before next monitor cycle...`);
+          setTimeout(() => {
+            if (isCancelledRef.current || isPausedRef.current) return;
+            setCycleCount((prev) => prev + 1);
+            for (const t of targetsRef.current) {
+              t.status = 'pending';
+              if (onTargetStatusChange) {
+                onTargetStatusChange(t.id, 'pending');
+              }
+            }
+            dispatchWorkers();
+          }, 5000);
+        } else {
+          setStatus('COMPLETED');
+          setActivePhase('All Ingested Domains Crawled Successfully');
+          setCurrentTargetName(null);
+          setTargetSubProgress(100);
+        }
       }
       return;
     }
@@ -397,12 +413,22 @@ export function useCrawlerController(
     isCancelledRef.current = true;
     isPausedRef.current = false;
     activeWorkersRef.current.clear();
-    targetsRef.current = [];
+    for (const t of targetsRef.current) {
+      if (t.status === 'crawling') {
+        t.status = 'pending';
+        if (onTargetStatusChange) {
+          onTargetStatusChange(t.id, 'pending');
+        }
+      }
+    }
     setStatus('CANCELLED');
     setCurrentTargetName(null);
-    setActivePhase('All Active Crawls Cancelled by User');
+    setActivePhase('All Active Crawls Cancelled by Operator');
     setTargetSubProgress(0);
-  }, []);
+
+    // Cancel active backend jobs so engine unblocks immediately
+    fetch('/api/crawl-jobs/cancel', { method: 'POST' }).catch(() => {});
+  }, [onTargetStatusChange]);
 
   // CLEAR RESULTS: Completely wipes React state, browser localStorage, MongoDB collections, and disk caches
   const clearResults = useCallback(async () => {

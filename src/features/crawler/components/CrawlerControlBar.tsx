@@ -14,6 +14,7 @@ import {
   CheckCircle2,
   Clock,
   Layers,
+  RefreshCw,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -29,6 +30,8 @@ interface CrawlerControlBarProps {
   onClear: () => void;
   hasTargets: boolean;
   hasResults: boolean;
+  isContinuous?: boolean;
+  onToggleContinuous?: () => void;
 }
 
 export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
@@ -41,6 +44,8 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
   onClear,
   hasTargets,
   hasResults,
+  isContinuous = true,
+  onToggleContinuous,
 }) => {
   const formatTime = (totalSeconds: number) => {
     const mins = Math.floor(totalSeconds / 60);
@@ -222,6 +227,25 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
 
         {/* Crawler Execution Controls */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          {/* Continuous Recon Loop Toggle */}
+          {onToggleContinuous && (
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={onToggleContinuous}
+              leftIcon={<RefreshCw size={13} />}
+              style={{
+                borderColor: isContinuous ? '#bae6fd' : '#e2e8f0',
+                color: isContinuous ? '#0284c7' : '#64748b',
+                background: isContinuous ? '#f0f9ff' : '#ffffff',
+                fontWeight: 600,
+              }}
+              title="Toggle Continuous Multi-Cycle Autonomous Reconnaissance"
+            >
+              {isContinuous ? 'Continuous Loop: ON' : 'Continuous Loop: OFF'}
+            </Button>
+          )}
+
           {/* Start or Resume */}
           {status === 'IDLE' || status === 'COMPLETED' || status === 'CANCELLED' ? (
             <Button

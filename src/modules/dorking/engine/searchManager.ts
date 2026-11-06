@@ -7,7 +7,7 @@ import { BaseSearchProvider } from '../providers/baseProvider';
 import { GoogleSearchProvider } from '../providers/googleProvider';
 import { BingSearchProvider } from '../providers/bingProvider';
 import { SerpApiSearchProvider } from '../providers/serpApiProvider';
-import { SearXNGSearchProvider } from '../providers/duckduckgoProvider';
+import { DuckDuckGoSearchProvider } from '../providers/duckduckgoProvider';
 import { MockSearchProvider } from '../providers/mockProvider';
 import { SearchResultItem, ProviderStats } from '../types/dorking.types';
 
@@ -28,10 +28,10 @@ export class SearchManager {
     this.maxPagesPerQuery = config.maxPagesPerQuery || 2;
 
     // Register built-in providers
+    this.registerProvider(new DuckDuckGoSearchProvider());
     this.registerProvider(new GoogleSearchProvider());
     this.registerProvider(new BingSearchProvider());
     this.registerProvider(new SerpApiSearchProvider());
-    this.registerProvider(new SearXNGSearchProvider());
     this.registerProvider(new MockSearchProvider());
   }
 

@@ -5,6 +5,7 @@ import { connectMongo, MongoScrapedResultModel } from '@/lib/mongodb';
 import { redisQueue } from '@/lib/redisQueue';
 import { DorkingPersistenceService } from '@/modules/dorking/services/persistence';
 import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
+import { classifySite } from '@/lib/crawler/siteClassifier';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,21 +55,22 @@ export async function GET() {
             ? `${d.domain} operates an active web presence with ${subCount} discovered subdomains and network infrastructure.`
             : `${d.domain} corporate web services and domain operations.`));
 
+      const fallbackIntel = classifySite('', d.domain || d.rootDomain || d.subdomain || '');
       const cleanCategory =
         d.category &&
         d.category !== 'Site Inaccessible' &&
         d.category !== 'Discovering Domain Intelligence...' &&
         d.category !== 'Public Domain Scope'
           ? d.category
-          : (isOfflineStatus ? (d.errorTitle || 'Site Inaccessible') : 'Corporate & Business Services');
+          : (isOfflineStatus ? (d.errorTitle || 'Site Inaccessible') : fallbackIntel.category);
 
       const cleanCategoryIcon =
         d.categoryIcon &&
         d.categoryIcon !== '⚠️' &&
         d.categoryIcon !== '🔍' &&
-        d.categoryIcon !== '🏛️'
+        d.category !== 'Public Domain Scope'
           ? d.categoryIcon
-          : (isOfflineStatus ? '⚠️' : '🌐');
+          : (isOfflineStatus ? '⚠️' : fallbackIntel.categoryIcon);
 
       return {
         id: d.id || String(d._id),

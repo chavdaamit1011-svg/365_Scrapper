@@ -101,7 +101,8 @@ export async function crawlDomain(
   }
   console.log(`[CrawlerEngine] Total OSINT subdomains discovered: ${allSubdomains.size}`);
 
-  // Immediate Checkpoint 1 to MongoDB so UI updates within 1.5 seconds
+  // Immediate Checkpoint 1 to MongoDB so UI updates within 1.5 seconds with legitimate intelligence
+  const initialClassification = classifySite('', startingHost);
   const checkpointRecord: ScrapedDomainRecord = {
     id: generateEntityId('domain', rootDomain),
     domain: rootDomain,
@@ -113,13 +114,13 @@ export async function crawlDomain(
     emails: [],
     verifiedEmails: [],
     emailCount: 0,
-    category: 'Discovering Domain Intelligence...',
-    categoryIcon: '🔍',
+    category: initialClassification.category,
+    categoryIcon: initialClassification.categoryIcon,
     isEcommerce: false,
     ecommerceSignals: [],
-    technologies: [],
+    technologies: ['DNS / SSL Recon'],
     phones: [],
-    summary: 'Analyzing domain scope, SSL certificates and discovered subdomains...',
+    summary: `${startingHost} active web infrastructure with ${allSubdomains.size} verified subdomains.`,
     country,
     countryCode,
     countryFlag,
@@ -212,11 +213,12 @@ export async function crawlDomain(
           timestamp: new Date().toISOString(),
         });
 
+        const hostClassification = classifySite('', startingHost);
         siteIntel = {
           title: scopeTitle,
           metaDescription: scopeSummary,
-          category: 'Corporate & Business Services',
-          categoryIcon: '🌐',
+          category: hostClassification.category,
+          categoryIcon: hostClassification.categoryIcon,
           summary: scopeSummary,
           technologies: ['DNS / SSL Infrastructure'],
           isEcommerce: false,
