@@ -61,8 +61,12 @@ export default function DashboardPage() {
   // Crawler Controller Hook
   const crawler = useCrawlerController(targets, handleTargetStatusChange);
 
-  // Determine whether crawler is actively working or paused
-  const isScrapingActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
+  // Determine whether crawler workers are actively running or paused
+  const isAnyWorkerActive =
+    crawler.status === 'RUNNING' ||
+    crawler.status === 'PAUSED' ||
+    (Array.isArray(crawler.stats.activeWorkersList) && crawler.stats.activeWorkersList.length > 0);
+  const isScrapingActive = isAnyWorkerActive;
 
   useEffect(() => {
     const session = getClientSession();
@@ -343,18 +347,29 @@ export default function DashboardPage() {
               existingTargets={targets}
             />
 
-            {/* Middle: Crawler Engine Command Center - ALWAYS VISIBLE WITH FULL OPERATOR CONTROLS */}
-            <CrawlerControlBar
-              status={crawler.status}
-              stats={crawler.stats}
-              onStart={crawler.startCrawler}
-              onPause={crawler.pauseCrawler}
-              onResume={crawler.resumeCrawler}
-              onCancel={crawler.cancelCrawler}
-              onClear={crawler.clearResults}
-              hasTargets={targets.length > 0}
-              hasResults={crawler.scrapedResults.length > 0}
-            />
+            {/* Middle: Crawler Engine Command Center - ONLY VISIBLE WHEN WORKERS ARE ACTIVELY RUNNING */}
+            <AnimatePresence>
+              {isAnyWorkerActive && (
+                <motion.div
+                  initial={{ opacity: 0, height: 0, y: -10 }}
+                  animate={{ opacity: 1, height: 'auto', y: 0 }}
+                  exit={{ opacity: 0, height: 0, y: -10 }}
+                  transition={{ duration: 0.25, ease: 'easeOut' }}
+                >
+                  <CrawlerControlBar
+                    status={crawler.status}
+                    stats={crawler.stats}
+                    onStart={crawler.startCrawler}
+                    onPause={crawler.pauseCrawler}
+                    onResume={crawler.resumeCrawler}
+                    onCancel={crawler.cancelCrawler}
+                    onClear={crawler.clearResults}
+                    hasTargets={targets.length > 0}
+                    hasResults={crawler.scrapedResults.length > 0}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Bottom Section Switcher: Scraped Intelligence Stream vs Target Queue Scope */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
