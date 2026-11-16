@@ -33,7 +33,7 @@ import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
 import { ScrapedDataRecord, CrawledPageDetail, ActiveWorkerSummary } from '../types/crawler.types';
 import { TargetItem } from '@/features/targets/types/target.types';
-import { exportCrawlerResultsToCSV } from '../utils/exportCrawlerResults';
+import { exportCrawlerResultsToCSV, exportSingleTargetToCSV } from '../utils/exportCrawlerResults';
 import { SubdomainListExplorer } from './SubdomainListExplorer';
 import { buildPhoneRedirectUrl, ScrapedPhoneDetail } from '@/lib/crawler/phoneExtractor';
 
@@ -152,7 +152,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   activeCycle = 1,
 }) => {
   const [datasetView, setDatasetView] = useState<'live' | 'database'>('live');
-  const [groupingMode, setGroupingMode] = useState<'grouped' | 'flat'>('grouped');
   const [searchTerm, setSearchTerm] = useState('');
   const [countryFilter, setCountryFilter] = useState<string>('ALL');
   const [scopeFilter, setScopeFilter] = useState<'all' | 'subdomains' | 'contacts' | 'ecommerce'>('all');
@@ -162,6 +161,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   const [childDomainSearch, setChildDomainSearch] = useState<Record<string, string>>({});
   const [activeChildSubdomainDomain, setActiveChildSubdomainDomain] = useState<ScrapedDataRecord | null>(null);
   const [expandedChildPagesId, setExpandedChildPagesId] = useState<string | null>(null);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
   // Automatically switch to Live Active Scraping whenever a crawl run is triggered
@@ -383,11 +383,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
 
     const allNormalized = Array.from(map.values());
 
-    if (groupingMode === 'flat') {
-      return allNormalized.filter((r) => !r.isTldZone && !r.domain.startsWith('.'));
-    }
-
-    // Hierarchical Grouping Mode: Group child domains under their respective Master TLD Zone
+    // Group child domains under their respective Master TLD Zone if a TLD was targeted
     // 1. Identify all active or discovered TLD Zones
     const tldZoneKeys = new Set<string>();
 
@@ -510,7 +506,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
     }
 
     return finalGroups;
-  }, [records, targets, groupingMode]);
+  }, [records, targets]);
 
   // Set of actively crawling domains from props
   const activeCrawlingDomainSet = useMemo(() => {
@@ -763,15 +759,15 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             borderRadius: '10px',
             fontSize: '13px',
             fontWeight: 700,
-            border: datasetView === 'database' ? '1.5px solid #6366f1' : '1px solid #e2e8f0',
-            background: datasetView === 'database' ? '#eef2ff' : '#ffffff',
-            color: datasetView === 'database' ? '#4338ca' : '#64748b',
+            border: datasetView === 'database' ? '1.5px solid #0284c7' : '1px solid #e2e8f0',
+            background: datasetView === 'database' ? '#f0f9ff' : '#ffffff',
+            color: datasetView === 'database' ? '#0369a1' : '#64748b',
             cursor: 'pointer',
-            boxShadow: datasetView === 'database' ? '0 2px 6px rgba(99, 102, 241, 0.14)' : 'none',
+            boxShadow: datasetView === 'database' ? '0 2px 6px rgba(2, 132, 199, 0.14)' : 'none',
             transition: 'all 0.15s ease',
           }}
         >
-          <Database size={15} color={datasetView === 'database' ? '#4f46e5' : '#64748b'} />
+          <Database size={15} color={datasetView === 'database' ? '#0284c7' : '#64748b'} />
           <span>📦 Previously Scraped Database</span>
           <span
             style={{
@@ -779,7 +775,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
               fontWeight: 700,
               padding: '2px 8px',
               borderRadius: '9999px',
-              background: datasetView === 'database' ? '#4f46e5' : '#e2e8f0',
+              background: datasetView === 'database' ? '#0284c7' : '#e2e8f0',
               color: datasetView === 'database' ? '#ffffff' : '#475569',
             }}
           >
@@ -992,81 +988,206 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             </div>
           )}
 
-          {/* Hierarchy Grouping Toggle (Grouped Scope vs Flat List) */}
-          <div
-            style={{
-              display: 'inline-flex',
-              alignItems: 'center',
-              background: '#f1f5f9',
-              padding: '3px',
-              borderRadius: '8px',
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              type="button"
-              onClick={() => setGroupingMode('grouped')}
-              style={{
-                position: 'relative',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                border: 'none',
-                background: groupingMode === 'grouped' ? '#ffffff' : 'transparent',
-                color: groupingMode === 'grouped' ? '#4338ca' : '#64748b',
-                cursor: 'pointer',
-                boxShadow: groupingMode === 'grouped' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                transition: 'all 0.15s ease',
-              }}
-              title="Group discovered domains under their TLD Zone scope (.com, .in)"
+          {/* Smart Export Dropdown Menu */}
+          <div style={{ position: 'relative' }}>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setIsExportMenuOpen((prev) => !prev)}
+              disabled={filteredGroups.length === 0}
+              leftIcon={<Download size={13} />}
+              rightIcon={<ChevronDown size={11} style={{ transform: isExportMenuOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }} />}
             >
-              <Layers size={12} color={groupingMode === 'grouped' ? '#4338ca' : '#64748b'} />
-              <span>Grouped Scope</span>
-            </motion.button>
-            <motion.button
-              whileHover={{ scale: 1.02 }}
-              whileTap={{ scale: 0.97 }}
-              type="button"
-              onClick={() => setGroupingMode('flat')}
-              style={{
-                position: 'relative',
-                padding: '4px 10px',
-                borderRadius: '6px',
-                fontSize: '11.5px',
-                fontWeight: 700,
-                border: 'none',
-                background: groupingMode === 'flat' ? '#ffffff' : 'transparent',
-                color: groupingMode === 'flat' ? '#4338ca' : '#64748b',
-                cursor: 'pointer',
-                boxShadow: groupingMode === 'flat' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: '5px',
-                transition: 'all 0.15s ease',
-              }}
-              title="View all domains as a flat list"
-            >
-              <FileText size={12} color={groupingMode === 'flat' ? '#4338ca' : '#64748b'} />
-              <span>Flat List</span>
-            </motion.button>
-          </div>
+              Export CSV ({filteredGroups.length})
+            </Button>
 
-          {/* Export CSV button */}
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={handleExport}
-            disabled={filteredGroups.length === 0}
-            leftIcon={<Download size={13} />}
-          >
-            Export CSV ({filteredGroups.length})
-          </Button>
+            {isExportMenuOpen && (
+              <>
+                <div
+                  style={{ position: 'fixed', inset: 0, zIndex: 90 }}
+                  onClick={() => setIsExportMenuOpen(false)}
+                />
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.96, y: -4 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.96, y: -4 }}
+                  transition={{ duration: 0.12 }}
+                  style={{
+                    position: 'absolute',
+                    top: 'calc(100% + 4px)',
+                    right: 0,
+                    width: '300px',
+                    background: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '8px',
+                    boxShadow: '0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.06)',
+                    zIndex: 100,
+                    padding: '6px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '2px',
+                    maxHeight: '380px',
+                    overflowY: 'auto',
+                  }}
+                >
+                  <div style={{ padding: '4px 8px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Bulk Export Options
+                  </div>
+
+                  {/* 1. Complete Database Export */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      exportCrawlerResultsToCSV(activeDatasetGroups, 'all_scraped_intelligence');
+                      setIsExportMenuOpen(false);
+                    }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      padding: '7px 10px',
+                      borderRadius: '6px',
+                      background: 'none',
+                      border: 'none',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      color: '#0f172a',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      <Download size={13} color="#0284c7" />
+                      <span>Export All Data ({activeDatasetGroups.length} Targets)</span>
+                    </div>
+                  </button>
+
+                  {/* Filtered Subset Export */}
+                  {filteredGroups.length !== activeDatasetGroups.length && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        exportCrawlerResultsToCSV(filteredGroups, 'filtered_scraped_intelligence');
+                        setIsExportMenuOpen(false);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        padding: '7px 10px',
+                        borderRadius: '6px',
+                        background: 'none',
+                        border: 'none',
+                        cursor: 'pointer',
+                        textAlign: 'left',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        color: '#0f172a',
+                      }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <Filter size={13} color="#0284c7" />
+                        <span>Export Filtered ({filteredGroups.length} Matches)</span>
+                      </div>
+                    </button>
+                  )}
+
+                  {/* 2. Target Scope / TLD Zones Export */}
+                  {filteredGroups.some((g) => g.isTldZone) && (
+                    <>
+                      <div style={{ borderTop: '1px solid #f1f5f9', margin: '4px 0' }} />
+                      <div style={{ padding: '4px 8px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                        Export By TLD Zone Scope
+                      </div>
+                      {filteredGroups
+                        .filter((g) => g.isTldZone)
+                        .map((zone) => (
+                          <button
+                            key={zone.id}
+                            type="button"
+                            onClick={() => {
+                              exportSingleTargetToCSV(zone);
+                              setIsExportMenuOpen(false);
+                            }}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              padding: '7px 10px',
+                              borderRadius: '6px',
+                              background: 'none',
+                              border: 'none',
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                              fontSize: '12px',
+                              fontWeight: 600,
+                              color: '#0f172a',
+                            }}
+                            onMouseEnter={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                            onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                          >
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <Globe size={13} color="#0284c7" />
+                              <span>Export {zone.domain} Scope</span>
+                            </div>
+                            <span style={{ fontSize: '10.5px', color: '#0369a1', background: '#e0f2fe', padding: '1px 5px', borderRadius: '4px' }}>
+                              {zone.childDomains?.length || zone.childDomainCount || 0} doms
+                            </span>
+                          </button>
+                        ))}
+                    </>
+                  )}
+
+                  {/* 3. Individual Target Domains Export */}
+                  <div style={{ borderTop: '1px solid #f1f5f9', margin: '4px 0' }} />
+                  <div style={{ padding: '4px 8px', fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
+                    Export Individual Targets
+                  </div>
+                  {filteredGroups
+                    .filter((g) => !g.isTldZone)
+                    .slice(0, 15)
+                    .map((indiv) => (
+                      <button
+                        key={indiv.id}
+                        type="button"
+                        onClick={() => {
+                          exportSingleTargetToCSV(indiv);
+                          setIsExportMenuOpen(false);
+                        }}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          padding: '6px 10px',
+                          borderRadius: '6px',
+                          background: 'none',
+                          border: 'none',
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          color: '#0f172a',
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = '#f1f5f9')}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+                      >
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                          <FileText size={12} color="#0284c7" />
+                          <span>{indiv.domain}</span>
+                        </div>
+                        <span style={{ fontSize: '10.5px', color: '#64748b' }}>
+                          {indiv.subdomainCount || indiv.subdomains?.length || 0} subs
+                        </span>
+                      </button>
+                    ))}
+                </motion.div>
+              </>
+            )}
+          </div>
 
           {/* Clear All Results button */}
           {domainGroups.length > 0 && (
@@ -1124,7 +1245,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                   variant="secondary"
                   size="sm"
                   onClick={() => setDatasetView('database')}
-                  leftIcon={<Database size={13} color="#4f46e5" />}
+                  leftIcon={<Database size={13} color="#0284c7" />}
                   style={{ fontWeight: 600 }}
                 >
                   Switch to Previously Scraped Database ({databaseGroups.length} Domains)
@@ -1138,8 +1259,8 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                   width: '46px',
                   height: '46px',
                   borderRadius: '50%',
-                  background: '#eef2ff',
-                  color: '#4f46e5',
+                  background: '#e0f2fe',
+                  color: '#0284c7',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
@@ -1218,23 +1339,23 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                     <tr
                       style={{
                         borderBottom: isExpanded ? 'none' : idx < filteredGroups.length - 1 ? '1px solid #f1f5f9' : 'none',
-                        background: isExpanded ? (isOffline ? '#fff8f8' : isTldRecord ? '#f5f3ff' : '#f8fafc') : (isTldRecord ? '#faf5ff' : 'transparent'),
+                        background: isExpanded ? (isOffline ? '#fff8f8' : '#f8fafc') : 'transparent',
                         transition: 'background 0.15s ease',
                       }}
                       onMouseEnter={(e) => {
-                        if (!isExpanded) e.currentTarget.style.background = isOffline ? '#fff5f5' : (isTldRecord ? '#f3e8ff' : '#fcfdfe');
+                        if (!isExpanded) e.currentTarget.style.background = isOffline ? '#fff5f5' : '#fcfdfe';
                       }}
                       onMouseLeave={(e) => {
-                        if (!isExpanded) e.currentTarget.style.background = isTldRecord ? '#faf5ff' : 'transparent';
+                        if (!isExpanded) e.currentTarget.style.background = 'transparent';
                       }}
                     >
                       {/* Column 1: Target Domain & Content Intelligence */}
                       <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <Globe size={isTldRecord ? 18 : 16} color={isTldRecord ? '#6d28d9' : (isOffline ? '#dc2626' : '#0284c7')} style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <Globe size={16} color={isOffline ? '#dc2626' : '#0284c7'} style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                              <span style={{ fontWeight: 800, color: isTldRecord ? '#5b21b6' : 'var(--text-main)', fontSize: isTldRecord ? '14.5px' : '13.5px' }}>
+                              <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13.5px' }}>
                                 {r.domain}
                               </span>
                               {isTldRecord && (
@@ -1242,17 +1363,17 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   style={{
                                     fontSize: '10px',
                                     fontWeight: 700,
-                                    color: '#6d28d9',
-                                    background: '#ede9fe',
+                                    color: '#0369a1',
+                                    background: '#e0f2fe',
                                     padding: '2px 7px',
                                     borderRadius: '4px',
-                                    border: '1px solid #ddd6fe',
+                                    border: '1px solid #bae6fd',
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: '3px',
                                   }}
                                 >
-                                  🌐 TLD ZONE SCOPE
+                                  🌐 TLD ZONE
                                 </span>
                               )}
                               {isCurrentlyCrawling ? (
@@ -1354,7 +1475,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                             </div>
                             {isTldRecord ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748b', marginTop: '3px' }}>
-                                <span style={{ color: '#4338ca', fontWeight: 700 }}>
+                                <span style={{ color: '#0369a1', fontWeight: 700 }}>
                                   🌐 {r.childDomains?.length || r.childDomainCount || 0} Root Domains
                                 </span>
                                 <span>•</span>
@@ -1461,15 +1582,15 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   fontWeight: 700,
                                   padding: '2px 8px',
                                   borderRadius: '6px',
-                                  background: isExpanded && currentTab === 'domains' ? '#4f46e5' : '#eef2ff',
-                                  color: isExpanded && currentTab === 'domains' ? '#ffffff' : '#4338ca',
-                                  border: `1px solid ${isExpanded && currentTab === 'domains' ? '#4f46e5' : '#c7d2fe'}`,
+                                  background: isExpanded && currentTab === 'domains' ? '#0284c7' : '#e0f2fe',
+                                  color: isExpanded && currentTab === 'domains' ? '#ffffff' : '#0369a1',
+                                  border: `1px solid ${isExpanded && currentTab === 'domains' ? '#0284c7' : '#bae6fd'}`,
                                   cursor: 'pointer',
                                   transition: 'all 0.15s ease',
                                 }}
                                 title="Click to view all discovered root domains in this TLD Zone"
                               >
-                                <Globe size={11} color={isExpanded && currentTab === 'domains' ? '#ffffff' : '#4338ca'} />
+                                <Globe size={11} color={isExpanded && currentTab === 'domains' ? '#ffffff' : '#0369a1'} />
                                 <span>{r.childDomains?.length || r.childDomainCount || 0} Discovered Domains</span>
                                 <ChevronDown
                                   size={10}
@@ -1494,15 +1615,17 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     padding: '2px 7px',
                                     borderRadius: '5px',
                                     background: '#f1f5f9',
-                                    color: '#4338ca',
-                                    border: '1px solid #e0e7ff',
+                                    color: '#0369a1',
+                                    border: '1px solid #e2e8f0',
                                     textDecoration: 'none',
                                   }}
                                   onMouseEnter={(e) => {
-                                    e.currentTarget.style.background = '#eef2ff';
+                                    e.currentTarget.style.background = '#e0f2fe';
+                                    e.currentTarget.style.borderColor = '#bae6fd';
                                   }}
                                   onMouseLeave={(e) => {
                                     e.currentTarget.style.background = '#f1f5f9';
+                                    e.currentTarget.style.borderColor = '#e2e8f0';
                                   }}
                                 >
                                   <span>{c.domain}</span>
@@ -1519,7 +1642,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     background: 'none',
                                     border: 'none',
                                     cursor: 'pointer',
-                                    color: '#4f46e5',
+                                    color: '#0284c7',
                                     fontSize: '11px',
                                     fontWeight: 700,
                                     padding: '2px 4px',
@@ -1758,31 +1881,69 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                         </Badge>
                       </td>
 
-                      {/* Column 6: Toggle Details */}
+                      {/* Column 6: Toggle Details & Target Export */}
                       <td style={{ padding: '11px 16px', textAlign: 'right', verticalAlign: 'middle' }}>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => toggleExpand(r.id, r)}
-                          rightIcon={
-                            <ChevronDown
-                              size={13}
-                              style={{
-                                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                                transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)',
-                              }}
-                            />
-                          }
-                        >
-                          {isExpanded ? 'Hide' : 'Details'}
-                        </Button>
+                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                          <motion.button
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              exportSingleTargetToCSV(r);
+                            }}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '4px',
+                              padding: '5px 9px',
+                              borderRadius: '6px',
+                              fontSize: '11.5px',
+                              fontWeight: 600,
+                              background: '#f1f5f9',
+                              color: '#0369a1',
+                              border: '1px solid #e2e8f0',
+                              cursor: 'pointer',
+                              transition: 'all 0.15s ease',
+                            }}
+                            title={isTldRecord ? `Export all ${r.domain} discovered domains & subdomains to CSV` : `Export ${r.domain} data to CSV`}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = '#e0f2fe';
+                              e.currentTarget.style.borderColor = '#bae6fd';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = '#f1f5f9';
+                              e.currentTarget.style.borderColor = '#e2e8f0';
+                            }}
+                          >
+                            <Download size={11} />
+                            <span>{isTldRecord ? `Export ${r.domain}` : 'Export'}</span>
+                          </motion.button>
+
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleExpand(r.id, r)}
+                            rightIcon={
+                              <ChevronDown
+                                size={13}
+                                style={{
+                                  transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                                  transition: 'transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)',
+                                }}
+                              />
+                            }
+                          >
+                            {isExpanded ? 'Hide' : 'Details'}
+                          </Button>
+                        </div>
                       </td>
                     </tr>
 
                     {/* Expandable Details Row with Smooth Accordion Animation */}
                     <tr
                       style={{
-                        background: isExpanded ? (isTldRecord ? '#faf5ff' : '#f8fafc') : 'transparent',
+                        background: isExpanded ? '#f8fafc' : 'transparent',
                         borderBottom: isExpanded ? '1px solid #e2e8f0' : 'none',
                         transition: 'background 0.25s ease',
                       }}
@@ -1822,13 +1983,13 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               <div
                                 style={{
                                   background: '#ffffff',
-                                  border: isTldRecord ? '1px solid #ddd6fe' : '1px solid #e2e8f0',
+                                  border: '1px solid #e2e8f0',
                                   borderRadius: '8px',
                                   padding: '16px',
                                   display: 'flex',
                                   flexDirection: 'column',
                                   gap: '14px',
-                                  boxShadow: isTldRecord ? '0 2px 8px rgba(109, 40, 217, 0.06)' : '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
+                                  boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
                                 }}
                               >
                                 {/* Section Switcher Tabs & Quick Navigation Header */}
@@ -1862,7 +2023,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                             label: 'Discovered Domains',
                                             count: r.childDomains?.length || 0,
                                             icon: <Globe size={13} />,
-                                            activeBg: '#4f46e5',
+                                            activeBg: '#0284c7',
                                           },
                                           {
                                             id: 'subdomains' as const,
@@ -1987,33 +2148,61 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     })}
                                   </div>
 
-                                  {/* Close Details Button */}
-                                  <motion.button
-                                    whileHover={{ scale: 1.05 }}
-                                    whileTap={{ scale: 0.95 }}
-                                    type="button"
-                                    onClick={() => setExpandedDomainId(null)}
-                                    style={{
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '4px',
-                                      padding: '5px 10px',
-                                      borderRadius: '6px',
-                                      fontSize: '11.5px',
-                                      fontWeight: 600,
-                                      color: '#64748b',
-                                      background: '#f1f5f9',
-                                      border: '1px solid #e2e8f0',
-                                      cursor: 'pointer',
-                                      transition: 'all 0.15s ease',
-                                    }}
-                                    title="Close details"
-                                    onMouseEnter={(e) => { e.currentTarget.style.background = '#e2e8f0'; }}
-                                    onMouseLeave={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
-                                  >
-                                    <X size={12} />
-                                    <span>Close</span>
-                                  </motion.button>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    {/* Export This Target / Scope CSV */}
+                                    <motion.button
+                                      whileHover={{ scale: 1.04 }}
+                                      whileTap={{ scale: 0.96 }}
+                                      type="button"
+                                      onClick={() => exportSingleTargetToCSV(r)}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '5px',
+                                        padding: '5px 12px',
+                                        borderRadius: '6px',
+                                        fontSize: '11.5px',
+                                        fontWeight: 600,
+                                        color: '#0369a1',
+                                        background: '#e0f2fe',
+                                        border: '1px solid #bae6fd',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease',
+                                      }}
+                                      title={isTldRecord ? `Download CSV of all ${r.domain} discovered domains & subdomains` : `Download CSV of ${r.domain}`}
+                                    >
+                                      <Download size={12} />
+                                      <span>{isTldRecord ? `Export ${r.domain} Scope (${r.childDomains?.length || 0} Domains)` : `Export ${r.domain} CSV`}</span>
+                                    </motion.button>
+
+                                    {/* Close Details Button */}
+                                    <motion.button
+                                      whileHover={{ scale: 1.05 }}
+                                      whileTap={{ scale: 0.95 }}
+                                      type="button"
+                                      onClick={() => setExpandedDomainId(null)}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        padding: '5px 10px',
+                                        borderRadius: '6px',
+                                        fontSize: '11.5px',
+                                        fontWeight: 600,
+                                        color: '#64748b',
+                                        background: '#f1f5f9',
+                                        border: '1px solid #e2e8f0',
+                                        cursor: 'pointer',
+                                        transition: 'all 0.15s ease',
+                                      }}
+                                      title="Close details"
+                                      onMouseEnter={(e) => { e.currentTarget.style.background = '#e2e8f0'; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
+                                    >
+                                      <X size={12} />
+                                      <span>Close</span>
+                                    </motion.button>
+                                  </div>
                                 </div>
 
                                 {/* Animated Tab Content Container */}
@@ -2042,7 +2231,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   >
                                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
                                       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                        <Globe size={16} color="#4f46e5" />
+                                        <Globe size={16} color="#0284c7" />
                                         <div>
                                           <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
                                             Discovered Root Domains under {r.domain} Zone Scope ({r.childDomains?.length || 0})
@@ -2347,8 +2536,35 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                                   </Badge>
                                                 </div>
 
-                                                {/* 6. Action: Inspect Pages */}
-                                                <div>
+                                                {/* 6. Actions: Inspect Pages & Export Single Domain CSV */}
+                                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                  <motion.button
+                                                    whileHover={{ scale: 1.05 }}
+                                                    whileTap={{ scale: 0.95 }}
+                                                    type="button"
+                                                    onClick={() => exportSingleTargetToCSV(child)}
+                                                    style={{
+                                                      display: 'inline-flex',
+                                                      alignItems: 'center',
+                                                      gap: '3px',
+                                                      padding: '4px 8px',
+                                                      borderRadius: '5px',
+                                                      border: '1px solid #e2e8f0',
+                                                      background: '#ffffff',
+                                                      color: '#0369a1',
+                                                      fontSize: '11px',
+                                                      fontWeight: 600,
+                                                      cursor: 'pointer',
+                                                      transition: 'all 0.15s ease',
+                                                    }}
+                                                    title={`Download CSV for ${child.domain}`}
+                                                    onMouseEnter={(e) => { e.currentTarget.style.background = '#e0f2fe'; e.currentTarget.style.borderColor = '#bae6fd'; }}
+                                                    onMouseLeave={(e) => { e.currentTarget.style.background = '#ffffff'; e.currentTarget.style.borderColor = '#e2e8f0'; }}
+                                                  >
+                                                    <Download size={10} />
+                                                    <span>CSV</span>
+                                                  </motion.button>
+
                                                   <motion.button
                                                     whileHover={{ scale: 1.05 }}
                                                     whileTap={{ scale: 0.95 }}
@@ -3086,9 +3302,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                                 fontWeight: 600,
                                                 padding: '2px 6px',
                                                 borderRadius: '4px',
-                                                background: discoveryMethod === 'playwright_dom' ? '#f5f3ff' : discoveryMethod === 'cloudflare_decode' ? '#ecfeff' : discoveryMethod === 'mailto_link' ? '#eff6ff' : '#f1f5f9',
-                                                color: discoveryMethod === 'playwright_dom' ? '#6d28d9' : discoveryMethod === 'cloudflare_decode' ? '#0e7490' : discoveryMethod === 'mailto_link' ? '#1d4ed8' : '#475569',
-                                                border: `1px solid ${discoveryMethod === 'playwright_dom' ? '#ddd6fe' : discoveryMethod === 'cloudflare_decode' ? '#a5f3fc' : discoveryMethod === 'mailto_link' ? '#bfdbfe' : '#e2e8f0'}`,
+                                                background: discoveryMethod === 'playwright_dom' ? '#f0fdfa' : discoveryMethod === 'cloudflare_decode' ? '#ecfeff' : discoveryMethod === 'mailto_link' ? '#eff6ff' : '#f1f5f9',
+                                                color: discoveryMethod === 'playwright_dom' ? '#0f766e' : discoveryMethod === 'cloudflare_decode' ? '#0e7490' : discoveryMethod === 'mailto_link' ? '#1d4ed8' : '#475569',
+                                                border: `1px solid ${discoveryMethod === 'playwright_dom' ? '#99f6e4' : discoveryMethod === 'cloudflare_decode' ? '#a5f3fc' : discoveryMethod === 'mailto_link' ? '#bfdbfe' : '#e2e8f0'}`,
                                               }}
                                               title={`Discovered via: ${discoveryMethod}`}
                                             >
