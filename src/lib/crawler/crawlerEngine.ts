@@ -10,11 +10,11 @@ import {
   CrawledPageDetail,
   VerifiedEmailDetail,
 } from './types';
-import { extractRootDomain, discoverAllSubdomains, isValidSubdomain, extractSubdomainsFromText } from './subdomainRecon';
+import { extractRootDomain, discoverAllSubdomains, isValidSubdomain, extractSubdomainsFromText, cleanSubdomainCandidate } from './subdomainRecon';
 import { fetchUniversal } from './universalFetcher';
 import { extractLinksAndSubdomains, getUrlPriority } from './linkExtractor';
 import { extractAndVerifyEmails } from './emailExtractor';
-import { extractPhoneNumbers } from './phoneExtractor';
+import { extractPhoneNumbers, extractPhoneDetails, ScrapedPhoneDetail } from './phoneExtractor';
 import { classifySite } from './siteClassifier';
 import { reconcileAndStoreResult } from './pipeline/reconciliation';
 import { generateEntityId } from '@/lib/entityId';
@@ -89,10 +89,68 @@ export async function crawlDomain(
 
   const allSubdomains = new Set<string>();
   const allEmails = new Map<string, VerifiedEmailDetail>();
-  const allPhones = new Set<string>();
+  const allPhones = new Map<string, ScrapedPhoneDetail>();
   const visitedRecords: CrawledPageDetail[] = [];
   const visitedUrls = new Set<string>();
   const queuedUrls = new Set<string>();
+
+  // Helper to determine if a URL is merely root apex / landing page
+  const isRootPageUrl = (u?: string): boolean => {
+    if (!u) return true;
+    try {
+      const p = new URL(u);
+      return p.pathname === '/' || p.pathname === '';
+    } catch {
+      return true;
+    }
+  };
+
+  const addSafeSubdomain = (cand: string) => {
+    const clean = cleanSubdomainCandidate(cand, rootDomain);
+    if (clean && clean !== rootDomain) {
+      allSubdomains.add(clean);
+    }
+  };
+
+  // Pre-load existing MongoDB intelligence across continuous cycles
+  // This guarantees that when advancing from Cycle 2 -> Cycle 3, existing emails/phones/subdomains
+  // NEVER disappear or flicker in the dashboard!
+  let existingRecord: ScrapedDomainRecord | null = null;
+  try {
+    const conn = await connectMongo();
+    if (conn?.connection?.db) {
+      const existingDoc = await conn.connection.db.collection('scraped_results').findOne({
+        $or: [{ id: generateEntityId('domain', rootDomain) }, { rootDomain }, { domain: rootDomain }],
+      });
+      if (existingDoc) {
+        existingRecord = existingDoc as unknown as ScrapedDomainRecord;
+        if (Array.isArray(existingRecord.verifiedEmails)) {
+          for (const em of existingRecord.verifiedEmails) {
+            if (em?.email) allEmails.set(em.email.toLowerCase(), em);
+          }
+        }
+        if (Array.isArray(existingRecord.scrapedPhones)) {
+          for (const ph of existingRecord.scrapedPhones) {
+            if (ph?.phone) allPhones.set(ph.phone, ph);
+          }
+        }
+        if (Array.isArray(existingRecord.subdomains)) {
+          for (const sub of existingRecord.subdomains) {
+            addSafeSubdomain(sub);
+          }
+        }
+        if (Array.isArray(existingRecord.crawledPages)) {
+          for (const pg of existingRecord.crawledPages) {
+            if (pg?.url) {
+              visitedRecords.push(pg);
+            }
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[CrawlerEngine] Could not pre-load existing record:', err);
+  }
 
   // Step 1: Combined Multi-Source Subdomain Reconnaissance & Real Search Dorking
   console.log(`[CrawlerEngine] Launching concurrent subdomain enumeration & search dorking for root: ${rootDomain}`);
@@ -102,12 +160,17 @@ export async function crawlDomain(
 
   const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain);
   for (const s of discoveredSubdomainsList) {
-    allSubdomains.add(s);
+    addSafeSubdomain(s);
   }
   console.log(`[CrawlerEngine] Total OSINT subdomains discovered: ${allSubdomains.size}`);
 
   // Immediate Checkpoint 1 to MongoDB so UI updates within 1.5 seconds with legitimate intelligence
   const initialClassification = classifySite('', startingHost);
+  const currentEmailsList = Array.from(allEmails.values());
+  const currentPhonesList = Array.from(allPhones.values());
+  const currentEmailStrings = currentEmailsList.map((e) => e.email);
+  const currentPhoneStrings = currentPhonesList.map((p) => p.phone);
+
   const checkpointRecord: ScrapedDomainRecord = {
     id: generateEntityId('domain', rootDomain),
     domain: rootDomain,
@@ -115,25 +178,26 @@ export async function crawlDomain(
     subdomain: startingHost,
     subdomains: Array.from(allSubdomains).sort(),
     subdomainCount: allSubdomains.size,
-    email: '',
-    emails: [],
-    verifiedEmails: [],
-    emailCount: 0,
-    category: initialClassification.category,
-    categoryIcon: initialClassification.categoryIcon,
-    isEcommerce: false,
-    ecommerceSignals: [],
-    technologies: ['DNS / SSL Recon'],
-    phones: [],
-    summary: `${startingHost} active web infrastructure with ${allSubdomains.size} verified subdomains.`,
+    email: currentEmailStrings[0] || existingRecord?.email || '',
+    emails: currentEmailStrings,
+    verifiedEmails: currentEmailsList,
+    emailCount: currentEmailStrings.length,
+    category: existingRecord?.category || initialClassification.category,
+    categoryIcon: existingRecord?.categoryIcon || initialClassification.categoryIcon,
+    isEcommerce: existingRecord?.isEcommerce || false,
+    ecommerceSignals: existingRecord?.ecommerceSignals || [],
+    technologies: existingRecord?.technologies || ['DNS / SSL Recon'],
+    phones: currentPhoneStrings,
+    scrapedPhones: currentPhonesList,
+    summary: existingRecord?.summary || `${startingHost} active web infrastructure with ${allSubdomains.size} verified subdomains.`,
     country,
     countryCode,
     countryFlag,
     status: 'CRAWLING',
     sourceUrl: startUrl,
-    pagesCrawled: 0,
-    crawledPages: [],
-    discoveredAt: new Date().toISOString(),
+    pagesCrawled: visitedRecords.length,
+    crawledPages: visitedRecords,
+    discoveredAt: existingRecord?.discoveredAt || new Date().toISOString(),
   };
 
   try {
@@ -199,7 +263,9 @@ export async function crawlDomain(
         // Extract verified emails, phones, and subdomains from live subdomain
         const subEmails = await extractAndVerifyEmails(subFetchSuccess.html, subFetchSuccess.finalUrl);
         for (const em of subEmails) allEmails.set(em.email, em);
-        for (const ph of extractPhoneNumbers(subFetchSuccess.html)) allPhones.add(ph);
+        for (const ph of extractPhoneDetails(subFetchSuccess.html, subFetchSuccess.finalUrl)) {
+          if (!allPhones.has(ph.phone)) allPhones.set(ph.phone, ph);
+        }
         for (const sub of extractSubdomainsFromText(subFetchSuccess.html, rootDomain)) allSubdomains.add(sub);
       } else {
         // Apex and subdomains are network/DNS only
@@ -276,8 +342,10 @@ export async function crawlDomain(
     }
 
     // Extract phones from root page
-    for (const ph of extractPhoneNumbers(rootFetchResult.html)) {
-      allPhones.add(ph);
+    for (const ph of extractPhoneDetails(rootFetchResult.html, rootFetchResult.finalUrl)) {
+      if (!allPhones.has(ph.phone)) {
+        allPhones.set(ph.phone, ph);
+      }
     }
 
     // Record root page
@@ -303,10 +371,10 @@ export async function crawlDomain(
     // Extract initial links and subdomains
     const rootLinks = extractLinksAndSubdomains(rootFetchResult.html, rootFetchResult.finalUrl, startingHost);
     for (const sub of rootLinks.discoveredSubdomains) {
-      allSubdomains.add(sub);
+      addSafeSubdomain(sub);
     }
     for (const sub of extractSubdomainsFromText(rootFetchResult.html, rootDomain)) {
-      allSubdomains.add(sub);
+      addSafeSubdomain(sub);
     }
 
     for (const link of rootLinks.internalUrls) {
@@ -316,19 +384,16 @@ export async function crawlDomain(
       }
     }
 
-    // Proactive contact candidate injection if no contact links were in internalUrls
-    const hasContact = rootLinks.internalUrls.some((l) => /contact|about|support/i.test(l));
-    if (!hasContact) {
-      const candidates = ['/contact', '/contact-us', '/about-us', '/support'];
-      for (const path of candidates) {
-        try {
-          const candUrl = new URL(path, startUrl).toString();
-          if (!visitedUrls.has(candUrl) && !queuedUrls.has(candUrl)) {
-            queuedUrls.add(candUrl);
-            queue.push({ priority: 90, depth: 1, url: candUrl });
-          }
-        } catch {}
-      }
+    // Always inject high-priority contact route candidates to guarantee dedicated contact pages are visited first
+    const contactCandidates = ['/contact', '/contact-us', '/contactus', '/about-us', '/about', '/support', '/reach-us', '/directory'];
+    for (const path of contactCandidates) {
+      try {
+        const candUrl = new URL(path, startUrl).toString();
+        if (!visitedUrls.has(candUrl) && !queuedUrls.has(candUrl)) {
+          queuedUrls.add(candUrl);
+          queue.push({ priority: 120, depth: 1, url: candUrl });
+        }
+      } catch {}
     }
 
     let pagesCrawled = 1;
@@ -374,24 +439,44 @@ export async function crawlDomain(
       // Extract emails
       const pageEmails = await extractAndVerifyEmails(pageRes.html, pageRes.finalUrl);
       for (const em of pageEmails) {
-        if (!allEmails.has(em.email)) {
+        const existingEm = allEmails.get(em.email);
+        if (!existingEm) {
           allEmails.set(em.email, em);
+        } else {
+          const existingIsRoot = isRootPageUrl(existingEm.sourceUrl);
+          const newIsSpecific = !isRootPageUrl(em.sourceUrl);
+          const isContact = /contact|about|support|help|reach|directory/i.test(em.sourceUrl || '');
+          if ((existingIsRoot && newIsSpecific) || isContact) {
+            allEmails.set(em.email, em);
+          }
         }
       }
 
       // Extract phones
-      for (const ph of extractPhoneNumbers(pageRes.html)) {
-        allPhones.add(ph);
+      for (const ph of extractPhoneDetails(pageRes.html, pageRes.finalUrl)) {
+        const existingPh = allPhones.get(ph.phone);
+        if (!existingPh) {
+          allPhones.set(ph.phone, ph);
+        } else {
+          // If existing phone was attached to root URL and this new discovery comes from a deeper subpage (e.g. /contact-us),
+          // update sourceUrl to the specific internal page!
+          const existingIsRoot = isRootPageUrl(existingPh.sourceUrl);
+          const newIsSpecific = !isRootPageUrl(ph.sourceUrl);
+          const isContact = /contact|about|support|help|reach|directory/i.test(ph.sourceUrl || '');
+          if ((existingIsRoot && newIsSpecific) || isContact) {
+            allPhones.set(ph.phone, ph);
+          }
+        }
       }
 
       // Extract subdomains & links
       if (current.depth < maxDepth) {
         const pageLinks = extractLinksAndSubdomains(pageRes.html, pageRes.finalUrl, startingHost);
         for (const sub of pageLinks.discoveredSubdomains) {
-          allSubdomains.add(sub);
+          addSafeSubdomain(sub);
         }
         for (const sub of extractSubdomainsFromText(pageRes.html, rootDomain)) {
-          allSubdomains.add(sub);
+          addSafeSubdomain(sub);
         }
 
         for (const nextLink of pageLinks.internalUrls) {
@@ -421,6 +506,31 @@ export async function crawlDomain(
   const sortedSubdomains = Array.from(allSubdomains).sort();
   const rankedEmailStrings = verifiedEmailsList.map((e) => e.email);
 
+  // Reconcile Phone source URLs:
+  // If a phone number is currently attached to the root homepage ('/'),
+  // but the website has a dedicated contact page (e.g. /contact, /contact-us, or email sourceUrl)
+  // that was crawled and is a verified contact route, associate the phone with the dedicated contact page!
+  const contactPageRecord = visitedRecords.find(
+    (p) => p.statusCode >= 200 && p.statusCode < 400 && /contact|reach|about|support/i.test(p.url)
+  );
+  const primaryContactUrl = contactPageRecord?.url || verifiedEmailsList.find((e) => /contact/i.test(e.sourceUrl || ''))?.sourceUrl;
+
+  if (primaryContactUrl) {
+    for (const ph of allPhones.values()) {
+      if (isRootPageUrl(ph.sourceUrl)) {
+        ph.sourceUrl = primaryContactUrl;
+      }
+    }
+  }
+
+  const scrapedPhonesList = Array.from(allPhones.values());
+  if (scrapedPhonesList.length > 0) {
+    scrapedPhonesList.forEach((p, idx) => {
+      p.isPrimary = idx === 0;
+    });
+  }
+  const phoneStrings = scrapedPhonesList.map((p) => p.phone);
+
   const finalRecord: ScrapedDomainRecord = {
     id: generateEntityId('domain', rootDomain),
     domain: rootDomain,
@@ -437,7 +547,8 @@ export async function crawlDomain(
     isEcommerce: siteIntel.isEcommerce,
     ecommerceSignals: siteIntel.ecommerceSignals,
     technologies: siteIntel.technologies,
-    phones: Array.from(allPhones),
+    phones: phoneStrings,
+    scrapedPhones: scrapedPhonesList,
     summary: siteIntel.summary,
     country,
     countryCode,

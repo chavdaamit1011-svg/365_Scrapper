@@ -41,9 +41,34 @@ export function isValidHostnameSyntax(hostname: string): boolean {
 }
 
 /**
- * Normalizes a hostname to lower case, removes leading www. if needed, strips whitespace
+ * Normalizes a hostname to lower case, removes leading www. if needed, strips whitespace & URL encoding artifacts
  */
 export function normalizeHostname(hostname: string): string {
-  return hostname.trim().toLowerCase().replace(/^https?:\/\//i, '').split('/')[0].split(':')[0];
+  if (!hostname || typeof hostname !== 'string') return '';
+  let h = hostname.trim().toLowerCase();
+  try {
+    if (h.includes('%')) {
+      h = decodeURIComponent(h);
+    }
+  } catch {}
+
+  let prev = '';
+  while (h !== prev) {
+    prev = h;
+    h = h.replace(/^[a-z0-9_-]+:\/\//i, '').replace(/^\/\//, '').replace(/^\/+/, '');
+    h = h.replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
+    h = h.replace(/^\*\./, '').replace(/^\./, '');
+  }
+
+  h = h.split('/')[0].split('?')[0].split('#')[0].split(':')[0];
+
+  prev = '';
+  while (h !== prev) {
+    prev = h;
+    h = h.replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
+    h = h.replace(/^\*\./, '').replace(/^\./, '');
+  }
+
+  return h;
 }
 

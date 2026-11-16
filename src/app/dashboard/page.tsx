@@ -50,8 +50,8 @@ export default function DashboardPage() {
 
   const handleTargetStatusChange = useCallback((targetId: string, newStatus: NonNullable<TargetItem['status']>) => {
     setTargets((prev) => {
-      // If a target was cancelled/stopped or completed, immediately remove it from the pending target queue
-      if (newStatus === 'cancelled' || newStatus === 'completed') {
+      // If a target was cancelled/stopped, immediately remove it from the queue & storage
+      if (newStatus === 'cancelled') {
         const updated = prev.filter((t) => t.id !== targetId);
         try {
           localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
@@ -384,7 +384,10 @@ export default function DashboardPage() {
                     onPause={crawler.pauseCrawler}
                     onResume={crawler.resumeCrawler}
                     onCancel={crawler.cancelCrawler}
-                    onClear={crawler.clearResults}
+                    onClear={() => {
+                      setTargets([]);
+                      crawler.clearResults();
+                    }}
                     hasTargets={targets.length > 0}
                     hasResults={crawler.scrapedResults.length > 0}
                   />
@@ -526,7 +529,10 @@ export default function DashboardPage() {
               <ScrapedResultsTable
                 records={crawler.scrapedResults}
                 isCrawling={crawler.status === 'RUNNING'}
-                onClearResults={crawler.clearResults}
+                onClearResults={() => {
+                  setTargets([]);
+                  crawler.clearResults();
+                }}
               />
             )}
 

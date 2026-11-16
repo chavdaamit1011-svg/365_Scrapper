@@ -184,6 +184,18 @@ const ScrapedResultSchema = new mongoose.Schema(
     ecommerceSignals: { type: [String], default: [] },
     technologies: { type: [String], default: [] },
     phones: { type: [String], default: [] },
+    scrapedPhones: {
+      type: [
+        {
+          phone: { type: String, default: '' },
+          sourceUrl: { type: String, default: '' },
+          rawMatch: { type: String, default: '' },
+          sectionId: { type: String, default: '' },
+          isPrimary: { type: Boolean, default: false },
+        },
+      ],
+      default: [],
+    },
     summary: { type: String, default: '' },
     country: { type: String, default: 'Detected' },
     countryCode: { type: String, default: 'INT' },

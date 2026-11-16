@@ -37,7 +37,7 @@ export async function GET() {
                 c = decodeURIComponent(c);
               } catch {}
               c = c.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].split('?')[0];
-              c = c.replace(/^(?:2f|252f)+/i, '');
+              c = c.replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
               return c;
             })
             .filter((s: string) => s && s.length > 0 && !s.startsWith('.') && s !== d.domain)
@@ -105,6 +105,16 @@ export async function GET() {
         ecommerceSignals: Array.isArray(d.ecommerceSignals) ? d.ecommerceSignals : [],
         technologies: Array.isArray(d.technologies) ? d.technologies : [],
         phones: Array.isArray(d.phones) ? d.phones : [],
+        scrapedPhones: Array.isArray(d.scrapedPhones) && d.scrapedPhones.length > 0
+          ? d.scrapedPhones
+          : (Array.isArray(d.phones)
+            ? d.phones.map((p: string, idx: number) => ({
+                phone: p,
+                sourceUrl: d.sourceUrl || (d.crawledPages && d.crawledPages[0]?.url) || '',
+                rawMatch: p,
+                isPrimary: idx === 0,
+              }))
+            : []),
         summary: cleanSummary,
         crawledPages: Array.isArray(d.crawledPages) ? d.crawledPages : [],
         country: d.country || 'Detected',

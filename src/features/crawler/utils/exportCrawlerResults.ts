@@ -12,6 +12,9 @@ export function exportCrawlerResultsToCSV(records: ScrapedDataRecord[], filename
     'Subdomain Count',
     'Extracted Emails',
     'Email Count',
+    'Verified Contact Phones',
+    'Phone Source Pages',
+    'Phone Count',
     'Country',
     'Country Code',
     'Pages Crawled Count',
@@ -25,6 +28,11 @@ export function exportCrawlerResultsToCSV(records: ScrapedDataRecord[], filename
     const emailsStr = r.emails && r.emails.length > 0 ? r.emails.join('; ') : (r.email || '');
     const subCount = r.subdomainCount ?? (r.subdomains ? r.subdomains.length : (r.subdomain ? 1 : 0));
     const emCount = r.emailCount ?? (r.emails ? r.emails.length : (r.email ? 1 : 0));
+    const phonesStr = Array.isArray(r.phones) && r.phones.length > 0 ? r.phones.join('; ') : '';
+    const phoneSourcesStr = Array.isArray(r.scrapedPhones) && r.scrapedPhones.length > 0
+      ? r.scrapedPhones.map((p) => `${p.phone}: ${p.sourceUrl || 'landing'}`).join('; ')
+      : '';
+    const phCount = Array.isArray(r.phones) ? r.phones.length : 0;
     const pagesList = Array.isArray(r.crawledPages) && r.crawledPages.length > 0
       ? r.crawledPages.map((p) => p.url).join('; ')
       : (r.pagesCrawled ? `${r.pagesCrawled} pages` : '');
@@ -38,6 +46,9 @@ export function exportCrawlerResultsToCSV(records: ScrapedDataRecord[], filename
       `"${subCount}"`,
       `"${emailsStr.replace(/"/g, '""')}"`,
       `"${emCount}"`,
+      `"${phonesStr.replace(/"/g, '""')}"`,
+      `"${phoneSourcesStr.replace(/"/g, '""')}"`,
+      `"${phCount}"`,
       `"${(r.country || '').replace(/"/g, '""')}"`,
       `"${(r.countryCode || '').replace(/"/g, '""')}"`,
       `"${pagesCount}"`,

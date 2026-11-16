@@ -4,7 +4,7 @@
 
 import * as cheerio from 'cheerio';
 import { URL } from 'url';
-import { isValidSubdomain, extractRootDomain } from './subdomainRecon';
+import { isValidSubdomain, extractRootDomain, cleanSubdomainCandidate } from './subdomainRecon';
 
 export interface ExtractedLinksResult {
   internalUrls: string[];
@@ -134,9 +134,10 @@ export function extractLinksAndSubdomains(
       } else {
         externalUrls.add(normalized);
 
-        // Subdomain check (multi-level)
-        if (isValidSubdomain(linkHost, rootDomain) && !isSameHost) {
-          discoveredSubdomains.add(linkHost);
+        // Subdomain check (multi-level & strictly cleaned)
+        const cleanSub = cleanSubdomainCandidate(linkHost, rootDomain);
+        if (cleanSub && cleanSub !== cleanStartingHost) {
+          discoveredSubdomains.add(cleanSub);
         }
       }
     } catch {}

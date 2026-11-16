@@ -17,6 +17,7 @@ import {
   ShieldCheck,
   Network,
   Phone,
+  PhoneCall,
   ShoppingBag,
   Cpu,
   Tag,
@@ -29,6 +30,7 @@ import { Badge } from '@/components/ui/Badge';
 import { ScrapedDataRecord, CrawledPageDetail } from '../types/crawler.types';
 import { exportCrawlerResultsToCSV } from '../utils/exportCrawlerResults';
 import { SubdomainListExplorer } from './SubdomainListExplorer';
+import { buildPhoneRedirectUrl, ScrapedPhoneDetail } from '@/lib/crawler/phoneExtractor';
 
 interface ScrapedResultsTableProps {
   records: ScrapedDataRecord[];
@@ -103,6 +105,32 @@ function rankAndFilterEmails(emails: string[], targetDomain: string): string[] {
   });
 }
 
+/**
+ * Resolves the most accurate source page URL for a phone number.
+ * If the phone was detected on the root homepage footer ('/'), but the domain has a dedicated
+ * contact page (e.g. /contact, /contact-us, /reach-us) where verified emails/pages live,
+ * it intelligently resolves the source page to the dedicated contact page.
+ */
+function getEffectivePhoneSource(r: ScrapedDataRecord, phoneDetail?: ScrapedPhoneDetail): string {
+  const rawSource = phoneDetail?.sourceUrl || r.sourceUrl || `https://${r.domain}`;
+  const cleanPath = rawSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0];
+
+  if (!cleanPath || cleanPath === '/') {
+    const emailContact = r.verifiedEmails?.find((e: any) => /contact|reach|about|support|help/i.test(e?.sourceUrl || ''))?.sourceUrl;
+    if (emailContact) return emailContact;
+
+    const crawledContact = r.crawledPages?.find((p: any) => {
+      const u = typeof p === 'string' ? p : p?.url;
+      return /contact|reach|about|support|help/i.test(u || '');
+    });
+    if (crawledContact) {
+      return typeof crawledContact === 'string' ? crawledContact : (crawledContact.url || '');
+    }
+  }
+
+  return rawSource;
+}
+
 export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   records,
   isCrawling,
@@ -134,7 +162,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           cleanSub = decodeURIComponent(cleanSub);
         } catch {}
         cleanSub = cleanSub.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].split('?')[0];
-        cleanSub = cleanSub.replace(/^(?:2f|252f)+/i, '');
+        cleanSub = cleanSub.replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
         if (cleanSub && cleanSub !== domainKey && !cleanSub.startsWith('.')) {
           subList.push(cleanSub);
         }
@@ -303,6 +331,15 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         }
         if (Array.isArray(r.phones) && r.phones.length > 0) {
           existing.phones = Array.from(new Set([...(existing.phones || []), ...r.phones]));
+        }
+        if (Array.isArray(r.scrapedPhones) && r.scrapedPhones.length > 0) {
+          const phoneMap = new Map((existing.scrapedPhones || []).map((p) => [p.phone, p]));
+          for (const sp of r.scrapedPhones) {
+            if (!phoneMap.has(sp.phone)) {
+              phoneMap.set(sp.phone, sp);
+            }
+          }
+          existing.scrapedPhones = Array.from(phoneMap.values());
         }
         if (r.summary && !existing.summary) {
           existing.summary = r.summary;
@@ -595,7 +632,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                   Discovered Subdomains
                 </th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-muted)', fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Verified Emails
+                  Verified Contact (Email & Phone)
                 </th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-muted)', fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                   Country / Geo
@@ -858,18 +895,25 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                         )}
                       </td>
 
-                      {/* Column 3: Verified Emails */}
+                      {/* Column 3: Verified Contact Info (Emails & Phone Numbers) */}
                       <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                        {emails.length === 0 ? (
+                        {emails.length === 0 && (!r.phones || r.phones.length === 0) ? (
                           <span style={{ color: 'var(--text-muted)', fontSize: '12px', fontStyle: 'italic' }}>
                             None detected
                           </span>
                         ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {/* Emails */}
                             {emails.slice(0, 2).map((email, idx) => {
                               const isPrimary = idx === 0;
+                              const emailDetail = Array.isArray(r.verifiedEmails)
+                                ? r.verifiedEmails.find((v) => v.email?.toLowerCase() === email.toLowerCase())
+                                : undefined;
+                              const emailSource = emailDetail?.sourceUrl;
+                              const emailPath = emailSource ? (emailSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0] || '/') : '';
+
                               return (
-                                <div key={email} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                <div key={email} style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
                                   <Mail size={13} color="#0284c7" style={{ flexShrink: 0 }} />
                                   <span style={{ color: 'var(--text-main)', fontWeight: isPrimary ? 600 : 500, fontSize: '12.5px' }}>
                                     {email}
@@ -888,6 +932,33 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     >
                                       Primary
                                     </span>
+                                  )}
+                                  {emailSource && (
+                                    <a
+                                      href={emailSource}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={`Extracted from page: ${emailSource}`}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '3px',
+                                        fontSize: '10px',
+                                        fontWeight: 600,
+                                        color: '#0284c7',
+                                        background: '#f0f9ff',
+                                        border: '1px solid #bae6fd',
+                                        padding: '1px 6px',
+                                        borderRadius: '4px',
+                                        textDecoration: 'none',
+                                        transition: 'all 0.15s ease',
+                                      }}
+                                      onMouseEnter={(e) => { e.currentTarget.style.background = '#e0f2fe'; }}
+                                      onMouseLeave={(e) => { e.currentTarget.style.background = '#f0f9ff'; }}
+                                    >
+                                      <span>📍 {emailPath}</span>
+                                      <ExternalLink size={9} />
+                                    </a>
                                   )}
                                   <button
                                     type="button"
@@ -923,6 +994,133 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               >
                                 +{emails.length - 2} more emails
                               </button>
+                            )}
+
+                            {/* Phone Numbers */}
+                            {Array.isArray(r.phones) && r.phones.length > 0 && (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
+                                {r.phones.slice(0, 2).map((phone, pIdx) => {
+                                  const isPrimaryPhone = pIdx === 0;
+                                  const phoneDetail = Array.isArray(r.scrapedPhones)
+                                    ? r.scrapedPhones.find((p) => p.phone === phone)
+                                    : undefined;
+                                  const phoneSource = getEffectivePhoneSource(r, phoneDetail);
+                                  const redirectUrl = buildPhoneRedirectUrl(phone, phoneSource, phoneDetail?.rawMatch, phoneDetail?.sectionId);
+                                  const phonePath = phoneSource ? (phoneSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0] || '/') : '';
+
+                                  return (
+                                    <div key={phone} style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                      <Phone size={12} color="#059669" style={{ flexShrink: 0 }} />
+                                      <a
+                                        href={redirectUrl}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        title={`Redirect to exact page & highlight location: ${phoneSource || phone}`}
+                                        style={{
+                                          color: isPrimaryPhone ? '#065f46' : 'var(--text-main)',
+                                          fontWeight: isPrimaryPhone ? 600 : 500,
+                                          fontSize: '12px',
+                                          textDecoration: 'none',
+                                        }}
+                                        onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                                        onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+                                      >
+                                        {phone}
+                                      </a>
+                                      {isPrimaryPhone && (
+                                        <span
+                                          style={{
+                                            fontSize: '9.5px',
+                                            fontWeight: 700,
+                                            color: '#059669',
+                                            background: '#ecfdf5',
+                                            padding: '1px 5px',
+                                            borderRadius: '4px',
+                                            border: '1px solid #a7f3d0',
+                                          }}
+                                        >
+                                          Primary
+                                        </span>
+                                      )}
+                                      {phoneSource && (
+                                        <a
+                                          href={redirectUrl}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          title={`Scraped from page: ${phoneSource} (Click to open & highlight location)`}
+                                          style={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '3px',
+                                            fontSize: '10px',
+                                            fontWeight: 600,
+                                            color: '#047857',
+                                            background: '#ecfdf5',
+                                            border: '1px solid #a7f3d0',
+                                            padding: '1px 6px',
+                                            borderRadius: '4px',
+                                            textDecoration: 'none',
+                                            transition: 'all 0.15s ease',
+                                          }}
+                                          onMouseEnter={(e) => {
+                                            e.currentTarget.style.background = '#d1fae5';
+                                          }}
+                                          onMouseLeave={(e) => {
+                                            e.currentTarget.style.background = '#ecfdf5';
+                                          }}
+                                        >
+                                          <span>📍 {phonePath}</span>
+                                          <ExternalLink size={9} />
+                                        </a>
+                                      )}
+                                      <a
+                                        href={`tel:${phone.replace(/\s+/g, '')}`}
+                                        title="Dial phone number"
+                                        style={{
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          padding: '2px',
+                                          color: '#059669',
+                                        }}
+                                      >
+                                        <PhoneCall size={11} />
+                                      </a>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleCopy(phone, `${r.id}_ph_${phone}`)}
+                                        title="Copy phone number"
+                                        style={{
+                                          background: 'none',
+                                          border: 'none',
+                                          cursor: 'pointer',
+                                          padding: '2px',
+                                          color: copiedId === `${r.id}_ph_${phone}` ? '#10b981' : '#94a3b8',
+                                        }}
+                                      >
+                                        {copiedId === `${r.id}_ph_${phone}` ? <Check size={12} /> : <Copy size={12} />}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                                {r.phones.length > 2 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => toggleExpand(r.id)}
+                                    style={{
+                                      background: 'none',
+                                      border: 'none',
+                                      cursor: 'pointer',
+                                      color: '#047857',
+                                      fontSize: '11px',
+                                      fontWeight: 600,
+                                      textAlign: 'left',
+                                      padding: 0,
+                                    }}
+                                  >
+                                    +{r.phones.length - 2} more phones
+                                  </button>
+                                )}
+                              </div>
                             )}
                           </div>
                         )}
@@ -1199,46 +1397,99 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 )}
 
                                 {Array.isArray(r.phones) && r.phones.length > 0 && (
-                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', paddingTop: '2px' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', paddingTop: '4px' }}>
                                     <Phone size={12} color="#0284c7" />
                                     <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-main)' }}>Contact Phone:</span>
                                     {r.phones.map((phone, pIdx) => {
                                       const isPrimaryPhone = pIdx === 0;
+                                      const phoneDetail = Array.isArray(r.scrapedPhones)
+                                        ? r.scrapedPhones.find((p) => p.phone === phone)
+                                        : undefined;
+                                      const phoneSource = getEffectivePhoneSource(r, phoneDetail);
+                                      const redirectUrl = buildPhoneRedirectUrl(phone, phoneSource, phoneDetail?.rawMatch, phoneDetail?.sectionId);
+
                                       return (
-                                        <a
-                                          key={phone}
-                                          href={`tel:${phone.replace(/\s+/g, '')}`}
-                                          style={{
-                                            fontSize: '11px',
-                                            fontWeight: 600,
-                                            color: isPrimaryPhone ? '#065f46' : '#0369a1',
-                                            textDecoration: 'none',
-                                            background: isPrimaryPhone ? '#ecfdf5' : '#e0f2fe',
-                                            border: `1px solid ${isPrimaryPhone ? '#a7f3d0' : '#bae6fd'}`,
-                                            padding: '2px 8px',
-                                            borderRadius: '4px',
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '4px',
-                                          }}
-                                          title={isPrimaryPhone ? 'Primary Contact Phone' : 'Alternate Contact Phone'}
-                                        >
-                                          <span>{phone}</span>
-                                          {isPrimaryPhone && (
-                                            <span
+                                        <div key={phone} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                          <a
+                                            href={redirectUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{
+                                              fontSize: '11px',
+                                              fontWeight: 600,
+                                              color: isPrimaryPhone ? '#065f46' : '#0369a1',
+                                              textDecoration: 'none',
+                                              background: isPrimaryPhone ? '#ecfdf5' : '#e0f2fe',
+                                              border: `1px solid ${isPrimaryPhone ? '#a7f3d0' : '#bae6fd'}`,
+                                              padding: '2px 8px',
+                                              borderRadius: '4px',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              cursor: 'pointer',
+                                              transition: 'all 0.15s ease',
+                                            }}
+                                            onMouseEnter={(e) => {
+                                              e.currentTarget.style.textDecoration = 'underline';
+                                              e.currentTarget.style.borderColor = isPrimaryPhone ? '#059669' : '#0284c7';
+                                            }}
+                                            onMouseLeave={(e) => {
+                                              e.currentTarget.style.textDecoration = 'none';
+                                              e.currentTarget.style.borderColor = isPrimaryPhone ? '#a7f3d0' : '#bae6fd';
+                                            }}
+                                            title={`Redirect to exact page & highlight location: ${phoneSource || phone}`}
+                                          >
+                                            <span>{phone}</span>
+                                            <ExternalLink size={10} style={{ opacity: 0.7 }} />
+                                            {isPrimaryPhone && (
+                                              <span
+                                                style={{
+                                                  fontSize: '9.5px',
+                                                  background: '#059669',
+                                                  color: '#fff',
+                                                  padding: '1px 5px',
+                                                  borderRadius: '3px',
+                                                  fontWeight: 700,
+                                                }}
+                                              >
+                                                Primary
+                                              </span>
+                                            )}
+                                          </a>
+
+                                          {phoneSource && (
+                                            <a
+                                              href={redirectUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              title={`Scraped from page: ${phoneSource} (Click to open & highlight location)`}
                                               style={{
-                                                fontSize: '9.5px',
-                                                background: '#059669',
-                                                color: '#fff',
-                                                padding: '1px 5px',
-                                                borderRadius: '3px',
-                                                fontWeight: 700,
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '3px',
+                                                fontSize: '10.5px',
+                                                fontWeight: 500,
+                                                color: '#0284c7',
+                                                textDecoration: 'none',
+                                                background: '#f0f9ff',
+                                                border: '1px solid #bae6fd',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                transition: 'all 0.15s ease',
+                                              }}
+                                              onMouseEnter={(e) => {
+                                                e.currentTarget.style.textDecoration = 'underline';
+                                                e.currentTarget.style.background = '#e0f2fe';
+                                              }}
+                                              onMouseLeave={(e) => {
+                                                e.currentTarget.style.textDecoration = 'none';
+                                                e.currentTarget.style.background = '#f0f9ff';
                                               }}
                                             >
-                                              Primary
-                                            </span>
+                                              <span>📍 {phoneSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0] || '/'}</span>
+                                            </a>
                                           )}
-                                        </a>
+                                        </div>
                                       );
                                     })}
                                   </div>
@@ -1696,6 +1947,180 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </div>
                               )}
                             </div>
+
+                            {/* Verified Contact Phone Numbers section */}
+                            {Array.isArray(r.phones) && r.phones.length > 0 && (
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                                  <Phone size={14} color="#0284c7" />
+                                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                    Verified Contact Phone Numbers ({r.phones.length})
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                  {r.phones.map((phone, pIdx) => {
+                                    const isPrimaryPhone = pIdx === 0;
+                                    const phoneDetail = Array.isArray(r.scrapedPhones)
+                                      ? r.scrapedPhones.find((p) => p.phone === phone)
+                                      : undefined;
+                                    const phoneSource = getEffectivePhoneSource(r, phoneDetail);
+                                    const redirectUrl = buildPhoneRedirectUrl(phone, phoneSource, phoneDetail?.rawMatch, phoneDetail?.sectionId);
+
+                                    return (
+                                      <div
+                                        key={phone}
+                                        style={{
+                                          display: 'flex',
+                                          alignItems: 'center',
+                                          justifyContent: 'space-between',
+                                          flexWrap: 'wrap',
+                                          gap: '8px',
+                                          padding: '8px 12px',
+                                          borderRadius: '8px',
+                                          background: isPrimaryPhone ? '#ecfdf5' : '#f8fafc',
+                                          border: `1px solid ${isPrimaryPhone ? '#a7f3d0' : '#e2e8f0'}`,
+                                        }}
+                                      >
+                                        {/* Left: Phone + Primary Badge + Direct Page Redirect Link */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                                          <Phone size={14} color={isPrimaryPhone ? '#059669' : '#0284c7'} />
+                                          <a
+                                            href={redirectUrl}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            style={{
+                                              fontSize: '12.5px',
+                                              fontWeight: 600,
+                                              color: 'var(--text-main)',
+                                              textDecoration: 'none',
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              cursor: 'pointer',
+                                            }}
+                                            onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
+                                            title={`Redirect to exact page & highlight location: ${phoneSource || phone}`}
+                                          >
+                                            <span>{phone}</span>
+                                            <ExternalLink size={12} color="#0284c7" />
+                                          </a>
+
+                                          {isPrimaryPhone && (
+                                            <span
+                                              style={{
+                                                fontSize: '10px',
+                                                background: '#059669',
+                                                color: '#fff',
+                                                padding: '2px 6px',
+                                                borderRadius: '4px',
+                                                fontWeight: 700,
+                                              }}
+                                            >
+                                              Primary Phone
+                                            </span>
+                                          )}
+
+                                          {/* Source Page & Location Redirect Pill */}
+                                          {phoneSource && (
+                                            <a
+                                              href={redirectUrl}
+                                              target="_blank"
+                                              rel="noopener noreferrer"
+                                              title={`Scraped from page: ${phoneSource} (Click to open & highlight location)`}
+                                              style={{
+                                                display: 'inline-flex',
+                                                alignItems: 'center',
+                                                gap: '4px',
+                                                fontSize: '11px',
+                                                fontWeight: 500,
+                                                color: '#0284c7',
+                                                textDecoration: 'none',
+                                                background: '#f0f9ff',
+                                                border: '1px solid #bae6fd',
+                                                padding: '3px 8px',
+                                                borderRadius: '5px',
+                                                transition: 'all 0.15s ease',
+                                              }}
+                                              onMouseEnter={(e) => {
+                                                e.currentTarget.style.textDecoration = 'underline';
+                                                e.currentTarget.style.background = '#e0f2fe';
+                                              }}
+                                              onMouseLeave={(e) => {
+                                                e.currentTarget.style.textDecoration = 'none';
+                                                e.currentTarget.style.background = '#f0f9ff';
+                                              }}
+                                            >
+                                              <span>📍 {phoneSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0] || '/'}</span>
+                                              <span style={{ fontSize: '9.5px', color: '#0369a1', fontWeight: 600 }}>(Go to Location ↗)</span>
+                                            </a>
+                                          )}
+                                        </div>
+
+                                        {/* Right: Actions (Call, Copy) */}
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                          <a
+                                            href={`tel:${phone.replace(/\s+/g, '')}`}
+                                            style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              background: '#ffffff',
+                                              border: '1px solid #cbd5e1',
+                                              borderRadius: '5px',
+                                              padding: '3px 8px',
+                                              fontSize: '11px',
+                                              fontWeight: 500,
+                                              color: '#475569',
+                                              textDecoration: 'none',
+                                              transition: 'all 0.15s ease',
+                                            }}
+                                            title="Dial phone number"
+                                            onMouseEnter={(e) => { e.currentTarget.style.borderColor = '#94a3b8'; }}
+                                            onMouseLeave={(e) => { e.currentTarget.style.borderColor = '#cbd5e1'; }}
+                                          >
+                                            <PhoneCall size={12} color="#059669" />
+                                            <span>Call</span>
+                                          </a>
+
+                                          <button
+                                            type="button"
+                                            onClick={() => handleCopy(phone, `${r.id}_ph_${phone}`)}
+                                            title="Copy phone number"
+                                            style={{
+                                              display: 'inline-flex',
+                                              alignItems: 'center',
+                                              gap: '4px',
+                                              background: '#ffffff',
+                                              border: '1px solid #cbd5e1',
+                                              borderRadius: '5px',
+                                              cursor: 'pointer',
+                                              padding: '3px 8px',
+                                              fontSize: '11px',
+                                              fontWeight: 500,
+                                              color: copiedId === `${r.id}_ph_${phone}` ? '#10b981' : '#475569',
+                                              transition: 'all 0.15s ease',
+                                            }}
+                                          >
+                                            {copiedId === `${r.id}_ph_${phone}` ? (
+                                              <>
+                                                <Check size={12} color="#10b981" />
+                                                <span>Copied</span>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <Copy size={12} />
+                                                <span>Copy</span>
+                                              </>
+                                            )}
+                                          </button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
                           </div>
                         </div>
                       </div>

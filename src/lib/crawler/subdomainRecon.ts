@@ -55,17 +55,44 @@ export function extractRootDomain(hostnameOrUrl: string): string {
  * Cleans a candidate subdomain string by removing protocol, port, path,
  * decoding URI encoding (e.g. %2f -> /), and stripping leading URL encoding leftovers (like 2f or 252f).
  */
-export function cleanSubdomainCandidate(raw: string, cleanRoot: string): string | null {
+export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string | null {
   if (!raw || typeof raw !== 'string') return null;
   let s = raw.trim().toLowerCase();
 
-  // Strip URL encoding leftovers like 2f, 252f, 3a, 253a, 25
-  s = s.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
-  s = s.replace(/^[a-z0-9_-]+:\/\//i, '').replace(/^\/\//, '');
-  s = s.replace(/^\*\./, '').replace(/^\./, '');
+  // Decode URI if percent-encoded
+  try {
+    if (s.includes('%')) {
+      s = decodeURIComponent(s);
+    }
+  } catch {}
+
+  // Repeatedly strip protocols, leading slashes, and URL-encoding leftovers
+  let prev = '';
+  while (s !== prev) {
+    prev = s;
+    s = s.replace(/^[a-z0-9_-]+:\/\//i, '');
+    s = s.replace(/^\/\//, '');
+    s = s.replace(/^\/+/, '');
+    s = s.replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
+    s = s.replace(/^\*\./, '').replace(/^\./, '');
+  }
+
   s = s.split('/')[0].split('?')[0].split('#')[0].split(':')[0];
 
-  if (!s || s === cleanRoot || !s.endsWith(`.${cleanRoot}`)) return null;
+  // Second pass after splitting path/query
+  prev = '';
+  while (s !== prev) {
+    prev = s;
+    s = s.replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
+    s = s.replace(/^\*\./, '').replace(/^\./, '');
+  }
+
+  if (!s) return null;
+
+  if (cleanRoot) {
+    const root = cleanRoot.trim().toLowerCase();
+    if (s === root || !s.endsWith(`.${root}`)) return null;
+  }
 
   // Filter out emails, wildcards, slashes, percent, etc.
   if (
@@ -86,6 +113,7 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot: string): string 
   if (!dnsRegex.test(s)) return null;
 
   const parts = s.split('.');
+  if (parts.length < 2) return null;
   for (const p of parts) {
     if (!p || p.length > 63 || p.startsWith('-') || p.endsWith('-')) return null;
   }
@@ -94,7 +122,7 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot: string): string 
 }
 
 export function sanitizeCandidate(cand: string): string {
-  return cleanSubdomainCandidate(cand, '') || cand.trim().toLowerCase();
+  return cleanSubdomainCandidate(cand) || cand.trim().toLowerCase().replace(/^(?:2f|252f|3a|253a|25|%2f|%3a)+/i, '');
 }
 
 /**
@@ -429,6 +457,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     const urls = [
       `https://crt.sh/?q=%25.${encodeURIComponent(cleanRoot)}&output=json`,
       `https://crt.sh/?q=${encodeURIComponent(cleanRoot)}&output=json`,
+      `https://crt.sh/?q=%.${encodeURIComponent(cleanRoot)}&output=json`,
     ];
 
     await Promise.allSettled(
@@ -436,7 +465,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         try {
           const res = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            signal: AbortSignal.timeout(7000),
+            signal: AbortSignal.timeout(22000),
           });
           if (res.ok) {
             const data = await res.json();
@@ -449,6 +478,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
                   if (sub.startsWith('*')) sub = sub.slice(1);
                   addSub(sub);
                 }
+                if (item.common_name) {
+                  let cn = String(item.common_name).trim().toLowerCase();
+                  if (cn.startsWith('*.')) cn = cn.slice(2);
+                  if (cn.startsWith('*')) cn = cn.slice(1);
+                  addSub(cn);
+                }
               }
             }
           }
@@ -457,14 +492,14 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     );
   };
 
-  // 11. Vector: Archive.org Wayback Machine CDX
+  // 11. Vector: Archive.org Wayback Machine CDX (Deep Open Intelligence)
   const fetchArchiveOrg = async () => {
     try {
       const res = await fetch(
-        `http://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=1000`,
+        `https://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=10000`,
         {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(7000),
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+          signal: AbortSignal.timeout(20000),
         }
       );
 
@@ -473,8 +508,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         if (Array.isArray(rows)) {
           for (const row of rows.slice(1)) {
             try {
-              const parsed = new URL(row[0]);
-              addSub(parsed.hostname);
+              const raw = row[0];
+              if (raw) {
+                const urlStr = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `http://${raw}`;
+                const parsed = new URL(urlStr);
+                addSub(parsed.hostname);
+              }
             } catch {}
           }
         }
@@ -550,11 +589,18 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       'gmdc', 'gidc', 'gsrtc', 'gwssb', 'ssnl', 'gseb', 'gswan', 'collector', 'panchayat',
       'court', 'districts', 'sp', 'rto', 'cyber', 'vmc', 'smc', 'amc', 'rmc',
       'bmc', 'jmc', 'gpcb', 'getco', 'gsecl', 'ugvcl', 'mgvcl', 'pgvcl', 'dgvcl', 'guvnl',
-      'anyror', 'garvi', 'jantri', 'ikhedut', 'kuarbaishala', 'landrecords', 'tribal', 'diragri'
+      'anyror', 'garvi', 'jantri', 'ikhedut', 'kuarbaishala', 'landrecords', 'tribal', 'diragri',
+      // Additional Government, Education & Public Sector Portals
+      'ahmedabad', 'surat', 'vadodara', 'rajkot', 'bhavnagar', 'jamnagar', 'junagadh', 'gandhinagar',
+      'iim', 'iit', 'nit', 'iiit', 'nift', 'nirma', 'gtu', 'vnsgu', 'msubaroda', 'hngu', 'spuvvn', 'sauuni',
+      'passport', 'passports', 'visa', 'evisa', 'immigration', 'customs', 'revenue', 'tax', 'incometax',
+      'policerecruitment', 'policegov', 'forestgov', 'agrigov', 'healthgov', 'edugov', 'transportgov',
+      'tendergov', 'eprocurement', 'etender', 'eauction', 'smartcity', 'corporation', 'nagarpalika',
+      'discom', 'energygov', 'solar', 'wind', 'water', 'jal', 'jalshakti', 'swachh', 'krishi', 'kisan'
     ];
 
-    // Concurrently resolve in batches of 40 with Anycast DNS and non-blocking timeout
-    const batchSize = 40;
+    // Concurrently resolve in high-speed batches with Anycast DNS and non-blocking timeout
+    const batchSize = 60;
     for (let i = 0; i < candidatePrefixes.length; i += batchSize) {
       const batch = candidatePrefixes.slice(i, i + batchSize);
       await Promise.allSettled(
@@ -563,18 +609,11 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
           try {
             await Promise.race([
               dnsResolver.resolve4(candidate),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2800)),
+              dnsResolver.resolveCname(candidate),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
             ]);
             addSub(candidate);
-          } catch {
-            try {
-              await Promise.race([
-                dnsResolver.resolveCname(candidate),
-                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
-              ]);
-              addSub(candidate);
-            } catch {}
-          }
+          } catch {}
         })
       );
     }

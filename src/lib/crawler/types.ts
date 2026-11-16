@@ -21,6 +21,14 @@ export interface VerifiedEmailDetail {
   isPrimary?: boolean;
 }
 
+export interface ScrapedPhoneDetail {
+  phone: string;
+  sourceUrl?: string;
+  isPrimary?: boolean;
+  rawMatch?: string;
+  sectionId?: string;
+}
+
 export interface CrawlOptions {
   maxPages?: number;
   maxDepth?: number;
@@ -40,6 +48,7 @@ export interface SiteIntelligence {
   isEcommerce: boolean;
   ecommerceSignals: string[];
   phones: string[];
+  scrapedPhones?: ScrapedPhoneDetail[];
 }
 
 export interface ReconciliationStats {
@@ -78,6 +87,7 @@ export interface ScrapedDomainRecord {
   ecommerceSignals: string[];
   technologies: string[];
   phones: string[];
+  scrapedPhones?: ScrapedPhoneDetail[];
   summary: string;
   country: string;
   countryCode: string;
