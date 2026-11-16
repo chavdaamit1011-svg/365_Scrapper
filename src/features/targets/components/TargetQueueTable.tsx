@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Search, Trash2, Copy, Check, Globe, FileSpreadsheet, ListFilter, Download, Play } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Badge } from '@/components/ui/Badge';
@@ -171,8 +171,10 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
               { id: 'subdomain', label: `Subdomains (${subdomainCount})` },
             ] as const
           ).map((btn) => (
-            <button
+            <motion.button
               key={btn.id}
+              whileHover={{ scale: 1.03 }}
+              whileTap={{ scale: 0.97 }}
               type="button"
               onClick={() => setFilterType(btn.id)}
               style={{
@@ -205,7 +207,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                 />
               )}
               {btn.label}
-            </button>
+            </motion.button>
           ))}
         </div>
       </div>
@@ -283,7 +285,14 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                 <th style={{ padding: '12px 16px', fontWeight: 600, textAlign: 'right' }}>Action</th>
               </tr>
             </thead>
-            <tbody>
+            <AnimatePresence mode="wait">
+              <motion.tbody
+                key={filterType + search}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+              >
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={7} style={{ padding: '40px 18px', textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -445,7 +454,8 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                   </tr>
                 ))
               )}
-            </tbody>
+              </motion.tbody>
+            </AnimatePresence>
           </table>
         </div>
       </div>

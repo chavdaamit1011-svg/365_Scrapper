@@ -524,30 +524,45 @@ export default function DashboardPage() {
               </div>
             </div>
 
-            {/* View Mode 1: Scraped Intelligence Table (Domain, Subdomain, Email, Country) */}
-            {dataViewMode === 'results' && (
-              <ScrapedResultsTable
-                records={crawler.scrapedResults}
-                isCrawling={crawler.status === 'RUNNING'}
-                onClearResults={() => {
-                  setTargets([]);
-                  crawler.clearResults();
-                }}
-              />
-            )}
-
-            {/* View Mode 2: Ingested Target Queue Table (Strictly Upcoming Sequential Queue) */}
-            {dataViewMode === 'queue' && (
-              <TargetQueueTable
-                targets={pendingTargets}
-                activeTarget={targets.find((t) => t.status === 'crawling') || null}
-                onRemoveTarget={handleRemoveTarget}
-                onClearAll={handleClearTargets}
-                onStartCrawler={() => crawler.startCrawler()}
-                isCrawling={isScrapingActive}
-                cycleCount={crawler.stats.cycleCount || 1}
-              />
-            )}
+            {/* Animated View Mode Transition: Scraped Intelligence Table vs Ingested Target Queue */}
+            <AnimatePresence mode="wait">
+              {dataViewMode === 'results' ? (
+                <motion.div
+                  key="results-view"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <ScrapedResultsTable
+                    records={crawler.scrapedResults}
+                    isCrawling={crawler.status === 'RUNNING'}
+                    onClearResults={() => {
+                      setTargets([]);
+                      crawler.clearResults();
+                    }}
+                  />
+                </motion.div>
+              ) : (
+                <motion.div
+                  key="queue-view"
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  transition={{ duration: 0.22, ease: [0.16, 1, 0.3, 1] }}
+                >
+                  <TargetQueueTable
+                    targets={pendingTargets}
+                    activeTarget={targets.find((t) => t.status === 'crawling') || null}
+                    onRemoveTarget={handleRemoveTarget}
+                    onClearAll={handleClearTargets}
+                    onStartCrawler={() => crawler.startCrawler()}
+                    isCrawling={isScrapingActive}
+                    cycleCount={crawler.stats.cycleCount || 1}
+                  />
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
         )}
 

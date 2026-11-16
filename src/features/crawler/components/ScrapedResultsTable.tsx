@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useMemo } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   Download,
   Search,
@@ -23,6 +24,7 @@ import {
   Tag,
   Sparkles,
   FileText,
+  X,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -138,8 +140,10 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [countryFilter, setCountryFilter] = useState<string>('ALL');
+  const [scopeFilter, setScopeFilter] = useState<'all' | 'subdomains' | 'contacts' | 'ecommerce'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedDomainId, setExpandedDomainId] = useState<string | null>(null);
+  const [activeTabMap, setActiveTabMap] = useState<Record<string, 'pages' | 'subdomains' | 'contacts' | 'intel' | 'all'>>({});
   const [isClearing, setIsClearing] = useState(false);
 
   // Group and normalize records by root domain so every domain is an organized master entity
@@ -361,6 +365,17 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
     return Array.from(set).sort();
   }, [domainGroups]);
 
+  // Scope counts for animated Framer Motion filter buttons
+  const subCount = useMemo(
+    () => domainGroups.filter((r) => (r.subdomains && r.subdomains.length > 0) || (typeof r.subdomainCount === 'number' && r.subdomainCount > 0)).length,
+    [domainGroups]
+  );
+  const contactCount = useMemo(
+    () => domainGroups.filter((r) => (r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0)).length,
+    [domainGroups]
+  );
+  const ecomCount = useMemo(() => domainGroups.filter((r) => Boolean(r.isEcommerce)).length, [domainGroups]);
+
   // Filtered dataset
   const filteredGroups = useMemo(() => {
     return domainGroups.filter((r) => {
@@ -378,12 +393,29 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
 
       const matchesCountry = countryFilter === 'ALL' || r.country === countryFilter;
 
-      return matchesSearch && matchesCountry;
+      const matchesScope =
+        scopeFilter === 'all' ||
+        (scopeFilter === 'subdomains' && ((r.subdomains && r.subdomains.length > 0) || (typeof r.subdomainCount === 'number' && r.subdomainCount > 0))) ||
+        (scopeFilter === 'contacts' && ((r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0))) ||
+        (scopeFilter === 'ecommerce' && Boolean(r.isEcommerce));
+
+      return matchesSearch && matchesCountry && matchesScope;
     });
-  }, [domainGroups, searchTerm, countryFilter]);
+  }, [domainGroups, searchTerm, countryFilter, scopeFilter]);
+
+  type ExpandedTab = 'pages' | 'subdomains' | 'contacts' | 'intel' | 'all';
+
+  const toggleSection = (domainId: string, tab: ExpandedTab) => {
+    if (expandedDomainId === domainId && (activeTabMap[domainId] || 'pages') === tab) {
+      setExpandedDomainId(null);
+    } else {
+      setExpandedDomainId(domainId);
+      setActiveTabMap((prev) => ({ ...prev, [domainId]: tab }));
+    }
+  };
 
   const toggleExpand = (domainId: string) => {
-    setExpandedDomainId((prev) => (prev === domainId ? null : domainId));
+    toggleSection(domainId, activeTabMap[domainId] || 'all');
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -515,8 +547,66 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
           </p>
         </div>
 
-        {/* Action Controls: Search, Filter, Export, Clear */}
+        {/* Action Controls: Search, Scope Filter, Country, Export, Clear */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          {/* Framer Motion Scope Filter Tabs with Smooth Sliding Pill */}
+          <div
+            style={{
+              display: 'flex',
+              gap: '3px',
+              background: '#f1f5f9',
+              padding: '3px',
+              borderRadius: '8px',
+              border: '1px solid #e2e8f0',
+              position: 'relative',
+            }}
+          >
+            {[
+              { id: 'all' as const, label: `All (${domainGroups.length})` },
+              { id: 'subdomains' as const, label: `Subdomains (${subCount})` },
+              { id: 'contacts' as const, label: `Contacts (${contactCount})` },
+              { id: 'ecommerce' as const, label: `E-Commerce (${ecomCount})` },
+            ].map((btn) => (
+              <motion.button
+                key={btn.id}
+                whileHover={{ scale: 1.02 }}
+                whileTap={{ scale: 0.97 }}
+                type="button"
+                onClick={() => setScopeFilter(btn.id)}
+                style={{
+                  position: 'relative',
+                  padding: '5px 12px',
+                  borderRadius: '6px',
+                  fontSize: '11.5px',
+                  fontWeight: 600,
+                  border: 'none',
+                  background: 'transparent',
+                  color: scopeFilter === btn.id ? '#0284c7' : '#64748b',
+                  cursor: 'pointer',
+                  zIndex: 1,
+                  outline: 'none',
+                  transition: 'color 0.18s ease',
+                }}
+              >
+                {scopeFilter === btn.id && (
+                  <motion.div
+                    layoutId="scrapedScopeFilterPill"
+                    transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: '#ffffff',
+                      borderRadius: '6px',
+                      boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                      zIndex: -1,
+                    }}
+                  />
+                )}
+                {btn.label}
+              </motion.button>
+            ))}
+          </div>
+
           {/* Real-time search */}
           <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
             <Search
@@ -540,7 +630,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 border: '1px solid var(--border-subtle)',
                 background: '#ffffff',
                 outline: 'none',
-                width: '230px',
+                width: '210px',
               }}
             />
           </div>
@@ -645,9 +735,17 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 </th>
               </tr>
             </thead>
-            <tbody>
+            <AnimatePresence mode="wait">
+              <motion.tbody
+                key={scopeFilter + countryFilter}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+              >
               {filteredGroups.map((r, idx) => {
                 const isExpanded = expandedDomainId === r.id;
+                const currentTab = activeTabMap[r.id] || 'pages';
                 const subdomains = r.subdomains || [];
                 const emails = r.emails || [];
                 const crawledPages = r.crawledPages || [];
@@ -681,8 +779,8 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       }}
                     >
                       {/* Column 1: Target Domain & Content Intelligence */}
-                      <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
-                        <div style={{ display: 'flex', alignItems: 'flex-start', gap: '8px' }}>
+                      <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                           <Globe size={16} color={isOffline ? '#dc2626' : '#0284c7'} style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
@@ -787,28 +885,37 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   {r.categoryIcon || '🌐'} {r.category || 'Corporate & Business'}
                                 </span>
                                 <span>•</span>
-                                <button
+                                <motion.button
+                                  whileHover={{ scale: 1.05 }}
+                                  whileTap={{ scale: 0.95 }}
                                   type="button"
-                                  onClick={() => toggleExpand(r.id)}
+                                  onClick={() => toggleSection(r.id, 'pages')}
                                   style={{
-                                    background: 'none',
-                                    border: 'none',
-                                    padding: 0,
+                                    background: isExpanded && currentTab === 'pages' ? '#e0f2fe' : 'none',
+                                    border: isExpanded && currentTab === 'pages' ? '1px solid #bae6fd' : 'none',
+                                    borderRadius: '5px',
+                                    padding: '2px 6px',
                                     cursor: 'pointer',
-                                    color: isExpanded ? '#0284c7' : 'var(--text-muted)',
+                                    color: isExpanded && currentTab === 'pages' ? '#0369a1' : (isExpanded ? '#0284c7' : 'var(--text-muted)'),
                                     fontWeight: 600,
-                                    textDecoration: 'underline',
-                                    textUnderlineOffset: '2px',
                                     fontSize: '11px',
                                     display: 'inline-flex',
                                     alignItems: 'center',
-                                    gap: '3px',
+                                    gap: '4px',
+                                    transition: 'all 0.15s ease',
                                   }}
-                                  title="Click to view all crawled pages"
+                                  title="Click to open Crawled Pages dropdown"
                                 >
-                                  <FileText size={11} color={isExpanded ? '#0284c7' : '#64748b'} />
+                                  <FileText size={11} color={isExpanded && currentTab === 'pages' ? '#0284c7' : '#64748b'} />
                                   <span>{crawledPages.length > 0 ? `${crawledPages.length} pages` : (r.pagesCrawled && r.pagesCrawled > 0 ? `${r.pagesCrawled} pages` : (hasSubs ? '1 page (scope)' : '1 page'))}</span>
-                                </button>
+                                  <ChevronDown
+                                    size={10}
+                                    style={{
+                                      transform: isExpanded && currentTab === 'pages' ? 'rotate(180deg)' : 'none',
+                                      transition: 'transform 0.2s ease',
+                                    }}
+                                  />
+                                </motion.button>
                               </div>
                             )}
                           </div>
@@ -816,25 +923,43 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       </td>
 
                       {/* Column 2: Subdomains Preview / Count */}
-                      <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
+                      <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
                         {subdomains.length === 0 ? (
                           <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
                         ) : (
-                          <div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                              <span
+                              <motion.button
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                type="button"
+                                onClick={() => toggleSection(r.id, 'subdomains')}
                                 style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
                                   fontSize: '11.5px',
                                   fontWeight: 700,
                                   padding: '2px 8px',
                                   borderRadius: '6px',
-                                  background: '#e0f2fe',
-                                  color: '#0369a1',
-                                  border: '1px solid #bae6fd',
+                                  background: isExpanded && currentTab === 'subdomains' ? '#0284c7' : '#e0f2fe',
+                                  color: isExpanded && currentTab === 'subdomains' ? '#ffffff' : '#0369a1',
+                                  border: `1px solid ${isExpanded && currentTab === 'subdomains' ? '#0284c7' : '#bae6fd'}`,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
                                 }}
+                                title="Click to open Discovered Subdomains dropdown"
                               >
-                                {subdomains.length} Subdomains
-                              </span>
+                                <Network size={11} color={isExpanded && currentTab === 'subdomains' ? '#ffffff' : '#0369a1'} />
+                                <span>{subdomains.length} Subdomains</span>
+                                <ChevronDown
+                                  size={10}
+                                  style={{
+                                    transform: isExpanded && currentTab === 'subdomains' ? 'rotate(180deg)' : 'none',
+                                    transition: 'transform 0.2s ease',
+                                  }}
+                                />
+                              </motion.button>
                               {subdomains.slice(0, 2).map((sub) => {
                                 const targetUrl = sub.startsWith('http://') || sub.startsWith('https://') ? sub : `https://${sub}`;
                                 return (
@@ -874,9 +999,11 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 );
                               })}
                               {subdomains.length > 2 && (
-                                <button
+                                <motion.button
+                                  whileHover={{ scale: 1.08 }}
+                                  whileTap={{ scale: 0.95 }}
                                   type="button"
-                                  onClick={() => toggleExpand(r.id)}
+                                  onClick={() => toggleSection(r.id, 'subdomains')}
                                   style={{
                                     background: 'none',
                                     border: 'none',
@@ -886,9 +1013,10 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     fontWeight: 600,
                                     padding: '2px 4px',
                                   }}
+                                  title="Click to view all subdomains"
                                 >
                                   +{subdomains.length - 2} more
-                                </button>
+                                </motion.button>
                               )}
                             </div>
                           </div>
@@ -896,238 +1024,77 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       </td>
 
                       {/* Column 3: Verified Contact Info (Emails & Phone Numbers) */}
-                      <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
+                      <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
                         {emails.length === 0 && (!r.phones || r.phones.length === 0) ? (
                           <span style={{ color: 'var(--text-muted)', fontSize: '12px', fontStyle: 'italic' }}>
                             None detected
                           </span>
                         ) : (
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                            {/* Emails */}
-                            {emails.slice(0, 2).map((email, idx) => {
-                              const isPrimary = idx === 0;
-                              const emailDetail = Array.isArray(r.verifiedEmails)
-                                ? r.verifiedEmails.find((v) => v.email?.toLowerCase() === email.toLowerCase())
-                                : undefined;
-                              const emailSource = emailDetail?.sourceUrl;
-                              const emailPath = emailSource ? (emailSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0] || '/') : '';
-
-                              return (
-                                <div key={email} style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                                  <Mail size={13} color="#0284c7" style={{ flexShrink: 0 }} />
-                                  <span style={{ color: 'var(--text-main)', fontWeight: isPrimary ? 600 : 500, fontSize: '12.5px' }}>
-                                    {email}
-                                  </span>
-                                  {isPrimary && (
-                                    <span
-                                      style={{
-                                        fontSize: '10px',
-                                        fontWeight: 700,
-                                        color: '#059669',
-                                        background: '#ecfdf5',
-                                        padding: '1px 6px',
-                                        borderRadius: '4px',
-                                        border: '1px solid #a7f3d0',
-                                      }}
-                                    >
-                                      Primary
-                                    </span>
-                                  )}
-                                  {emailSource && (
-                                    <a
-                                      href={emailSource}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      title={`Extracted from page: ${emailSource}`}
-                                      style={{
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: '3px',
-                                        fontSize: '10px',
-                                        fontWeight: 600,
-                                        color: '#0284c7',
-                                        background: '#f0f9ff',
-                                        border: '1px solid #bae6fd',
-                                        padding: '1px 6px',
-                                        borderRadius: '4px',
-                                        textDecoration: 'none',
-                                        transition: 'all 0.15s ease',
-                                      }}
-                                      onMouseEnter={(e) => { e.currentTarget.style.background = '#e0f2fe'; }}
-                                      onMouseLeave={(e) => { e.currentTarget.style.background = '#f0f9ff'; }}
-                                    >
-                                      <span>📍 {emailPath}</span>
-                                      <ExternalLink size={9} />
-                                    </a>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleCopy(email, `${r.id}_${email}`)}
-                                    title="Copy email"
-                                    style={{
-                                      background: 'none',
-                                      border: 'none',
-                                      cursor: 'pointer',
-                                      padding: '2px',
-                                      color: copiedId === `${r.id}_${email}` ? '#10b981' : '#94a3b8',
-                                    }}
-                                  >
-                                    {copiedId === `${r.id}_${email}` ? <Check size={12} /> : <Copy size={12} />}
-                                  </button>
-                                </div>
-                              );
-                            })}
-                            {emails.length > 2 && (
-                              <button
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <motion.button
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
                                 type="button"
-                                onClick={() => toggleExpand(r.id)}
+                                onClick={() => toggleSection(r.id, 'contacts')}
                                 style={{
-                                  background: 'none',
-                                  border: 'none',
-                                  cursor: 'pointer',
-                                  color: '#0284c7',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
                                   fontSize: '11px',
-                                  fontWeight: 600,
-                                  textAlign: 'left',
-                                  padding: 0,
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '5px',
+                                  background: isExpanded && currentTab === 'contacts' ? '#059669' : '#ecfdf5',
+                                  color: isExpanded && currentTab === 'contacts' ? '#ffffff' : '#047857',
+                                  border: `1px solid ${isExpanded && currentTab === 'contacts' ? '#059669' : '#a7f3d0'}`,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
                                 }}
+                                title="Click to view all emails & phone numbers in dropdown"
                               >
-                                +{emails.length - 2} more emails
-                              </button>
-                            )}
+                                <Mail size={11} color={isExpanded && currentTab === 'contacts' ? '#ffffff' : '#059669'} />
+                                <span>{emails.length} Emails{Array.isArray(r.phones) && r.phones.length > 0 ? ` • ${r.phones.length} Phones` : ''}</span>
+                                <ChevronDown
+                                  size={10}
+                                  style={{
+                                    transform: isExpanded && currentTab === 'contacts' ? 'rotate(180deg)' : 'none',
+                                    transition: 'transform 0.2s ease',
+                                  }}
+                                />
+                              </motion.button>
+                            </div>
 
-                            {/* Phone Numbers */}
-                            {Array.isArray(r.phones) && r.phones.length > 0 && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
-                                {r.phones.slice(0, 2).map((phone, pIdx) => {
-                                  const isPrimaryPhone = pIdx === 0;
-                                  const phoneDetail = Array.isArray(r.scrapedPhones)
-                                    ? r.scrapedPhones.find((p) => p.phone === phone)
-                                    : undefined;
-                                  const phoneSource = getEffectivePhoneSource(r, phoneDetail);
-                                  const redirectUrl = buildPhoneRedirectUrl(phone, phoneSource, phoneDetail?.rawMatch, phoneDetail?.sectionId);
-                                  const phonePath = phoneSource ? (phoneSource.replace(/^https?:\/\/[^\/]+/, '').split('#')[0] || '/') : '';
-
-                                  return (
-                                    <div key={phone} style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                                      <Phone size={12} color="#059669" style={{ flexShrink: 0 }} />
-                                      <a
-                                        href={redirectUrl}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        title={`Redirect to exact page & highlight location: ${phoneSource || phone}`}
-                                        style={{
-                                          color: isPrimaryPhone ? '#065f46' : 'var(--text-main)',
-                                          fontWeight: isPrimaryPhone ? 600 : 500,
-                                          fontSize: '12px',
-                                          textDecoration: 'none',
-                                        }}
-                                        onMouseEnter={(e) => { e.currentTarget.style.textDecoration = 'underline'; }}
-                                        onMouseLeave={(e) => { e.currentTarget.style.textDecoration = 'none'; }}
-                                      >
-                                        {phone}
-                                      </a>
-                                      {isPrimaryPhone && (
-                                        <span
-                                          style={{
-                                            fontSize: '9.5px',
-                                            fontWeight: 700,
-                                            color: '#059669',
-                                            background: '#ecfdf5',
-                                            padding: '1px 5px',
-                                            borderRadius: '4px',
-                                            border: '1px solid #a7f3d0',
-                                          }}
-                                        >
-                                          Primary
-                                        </span>
-                                      )}
-                                      {phoneSource && (
-                                        <a
-                                          href={redirectUrl}
-                                          target="_blank"
-                                          rel="noopener noreferrer"
-                                          title={`Scraped from page: ${phoneSource} (Click to open & highlight location)`}
-                                          style={{
-                                            display: 'inline-flex',
-                                            alignItems: 'center',
-                                            gap: '3px',
-                                            fontSize: '10px',
-                                            fontWeight: 600,
-                                            color: '#047857',
-                                            background: '#ecfdf5',
-                                            border: '1px solid #a7f3d0',
-                                            padding: '1px 6px',
-                                            borderRadius: '4px',
-                                            textDecoration: 'none',
-                                            transition: 'all 0.15s ease',
-                                          }}
-                                          onMouseEnter={(e) => {
-                                            e.currentTarget.style.background = '#d1fae5';
-                                          }}
-                                          onMouseLeave={(e) => {
-                                            e.currentTarget.style.background = '#ecfdf5';
-                                          }}
-                                        >
-                                          <span>📍 {phonePath}</span>
-                                          <ExternalLink size={9} />
-                                        </a>
-                                      )}
-                                      <a
-                                        href={`tel:${phone.replace(/\s+/g, '')}`}
-                                        title="Dial phone number"
-                                        style={{
-                                          display: 'inline-flex',
-                                          alignItems: 'center',
-                                          padding: '2px',
-                                          color: '#059669',
-                                        }}
-                                      >
-                                        <PhoneCall size={11} />
-                                      </a>
-                                      <button
-                                        type="button"
-                                        onClick={() => handleCopy(phone, `${r.id}_ph_${phone}`)}
-                                        title="Copy phone number"
-                                        style={{
-                                          background: 'none',
-                                          border: 'none',
-                                          cursor: 'pointer',
-                                          padding: '2px',
-                                          color: copiedId === `${r.id}_ph_${phone}` ? '#10b981' : '#94a3b8',
-                                        }}
-                                      >
-                                        {copiedId === `${r.id}_ph_${phone}` ? <Check size={12} /> : <Copy size={12} />}
-                                      </button>
-                                    </div>
-                                  );
-                                })}
-                                {r.phones.length > 2 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleExpand(r.id)}
-                                    style={{
-                                      background: 'none',
-                                      border: 'none',
-                                      cursor: 'pointer',
-                                      color: '#047857',
-                                      fontSize: '11px',
-                                      fontWeight: 600,
-                                      textAlign: 'left',
-                                      padding: 0,
-                                    }}
+                            {/* Clean compact summary line of primary email & phone */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap', fontSize: '11.5px', marginTop: '1px' }}>
+                              {emails[0] && (
+                                <span
+                                  style={{ color: 'var(--text-main)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                  title={`Primary Email: ${emails[0]}`}
+                                >
+                                  <Mail size={11} color="#0284c7" />
+                                  <span>{emails[0]}</span>
+                                </span>
+                              )}
+                              {r.phones?.[0] && (
+                                <>
+                                  {emails[0] && <span style={{ color: '#cbd5e1' }}>•</span>}
+                                  <span
+                                    style={{ color: '#047857', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '3px' }}
+                                    title={`Primary Phone: ${r.phones[0]}`}
                                   >
-                                    +{r.phones.length - 2} more phones
-                                  </button>
-                                )}
-                              </div>
-                            )}
+                                    <Phone size={11} color="#059669" />
+                                    <span>{r.phones[0]}</span>
+                                  </span>
+                                </>
+                              )}
+                            </div>
                           </div>
                         )}
                       </td>
 
                       {/* Column 4: Country / Geo */}
-                      <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
+                      <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '7px' }}>
                           <span style={{ fontSize: '16px' }}>{r.countryFlag || '🌐'}</span>
                           <span style={{ fontWeight: 600, color: 'var(--text-main)', fontSize: '12.5px' }}>
@@ -1149,7 +1116,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       </td>
 
                       {/* Column 5: Status */}
-                      <td style={{ padding: '14px 16px', verticalAlign: 'top' }}>
+                      <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
                         <Badge
                           variant={
                             isCurrentlyCrawling
@@ -1168,7 +1135,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       </td>
 
                       {/* Column 6: Toggle Details */}
-                      <td style={{ padding: '14px 16px', textAlign: 'right', verticalAlign: 'top' }}>
+                      <td style={{ padding: '11px 16px', textAlign: 'right', verticalAlign: 'middle' }}>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -1240,8 +1207,161 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
                                 }}
                               >
-                            {/* Website Intelligence & Content Classification OR Offline Alert */}
-                            {isOffline ? (
+                                {/* Section Switcher Tabs & Quick Navigation Header */}
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'space-between',
+                                    borderBottom: '1px solid #e2e8f0',
+                                    paddingBottom: '12px',
+                                    flexWrap: 'wrap',
+                                    gap: '8px',
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      flexWrap: 'wrap',
+                                      background: '#f1f5f9',
+                                      padding: '3px',
+                                      borderRadius: '8px',
+                                      border: '1px solid #e2e8f0',
+                                    }}
+                                  >
+                                    {[
+                                      {
+                                        id: 'pages' as const,
+                                        label: 'Pages',
+                                        count: isOffline ? 0 : (crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1)),
+                                        icon: <FileText size={13} />,
+                                        activeBg: '#0284c7',
+                                      },
+                                      {
+                                        id: 'subdomains' as const,
+                                        label: 'Subdomains',
+                                        count: subdomains.length,
+                                        icon: <Network size={13} />,
+                                        activeBg: '#0284c7',
+                                      },
+                                      {
+                                        id: 'contacts' as const,
+                                        label: 'Contacts',
+                                        count: emails.length + (r.phones?.length || 0),
+                                        icon: <Mail size={13} />,
+                                        activeBg: '#059669',
+                                      },
+                                      {
+                                        id: 'intel' as const,
+                                        label: 'Intel & Tech',
+                                        icon: <Cpu size={13} />,
+                                        activeBg: '#475569',
+                                      },
+                                      {
+                                        id: 'all' as const,
+                                        label: 'All Combined',
+                                        icon: <Layers size={13} />,
+                                        activeBg: '#0f172a',
+                                      },
+                                    ].map((tab) => {
+                                      const isActive = currentTab === tab.id;
+                                      return (
+                                        <motion.button
+                                          key={tab.id}
+                                          whileHover={{ scale: 1.02 }}
+                                          whileTap={{ scale: 0.97 }}
+                                          type="button"
+                                          onClick={() => setActiveTabMap((prev) => ({ ...prev, [r.id]: tab.id }))}
+                                          style={{
+                                            position: 'relative',
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: '5px',
+                                            padding: '6px 13px',
+                                            borderRadius: '6px',
+                                            fontSize: '12px',
+                                            fontWeight: 600,
+                                            cursor: 'pointer',
+                                            border: 'none',
+                                            background: 'transparent',
+                                            color: isActive ? '#ffffff' : '#64748b',
+                                            zIndex: 1,
+                                            outline: 'none',
+                                            transition: 'color 0.18s ease',
+                                          }}
+                                        >
+                                          {isActive && (
+                                            <motion.div
+                                              layoutId={`activeSectionPill_${r.id}`}
+                                              transition={{ type: 'spring', stiffness: 500, damping: 35 }}
+                                              style={{
+                                                position: 'absolute',
+                                                inset: 0,
+                                                background: tab.activeBg,
+                                                borderRadius: '6px',
+                                                boxShadow: '0 2px 5px rgba(0,0,0,0.12)',
+                                                zIndex: -1,
+                                              }}
+                                            />
+                                          )}
+                                          <span style={{ display: 'inline-flex', alignItems: 'center' }}>
+                                            {React.cloneElement(tab.icon as React.ReactElement<any>, {
+                                              color: isActive ? '#ffffff' : '#64748b',
+                                            })}
+                                          </span>
+                                          <span>
+                                            {tab.label} {typeof tab.count === 'number' ? `(${tab.count})` : ''}
+                                          </span>
+                                        </motion.button>
+                                      );
+                                    })}
+                                  </div>
+
+                                  {/* Close Details Button */}
+                                  <motion.button
+                                    whileHover={{ scale: 1.05 }}
+                                    whileTap={{ scale: 0.95 }}
+                                    type="button"
+                                    onClick={() => setExpandedDomainId(null)}
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '4px',
+                                      padding: '5px 10px',
+                                      borderRadius: '6px',
+                                      fontSize: '11.5px',
+                                      fontWeight: 600,
+                                      color: '#64748b',
+                                      background: '#f1f5f9',
+                                      border: '1px solid #e2e8f0',
+                                      cursor: 'pointer',
+                                      transition: 'all 0.15s ease',
+                                    }}
+                                    title="Close details"
+                                    onMouseEnter={(e) => { e.currentTarget.style.background = '#e2e8f0'; }}
+                                    onMouseLeave={(e) => { e.currentTarget.style.background = '#f1f5f9'; }}
+                                  >
+                                    <X size={12} />
+                                    <span>Close</span>
+                                  </motion.button>
+                                </div>
+
+                                {/* Animated Tab Content Container */}
+                                <AnimatePresence mode="wait">
+                                  <motion.div
+                                    key={currentTab}
+                                    initial={{ opacity: 0, y: 8 }}
+                                    animate={{ opacity: 1, y: 0 }}
+                                    exit={{ opacity: 0, y: -8 }}
+                                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
+                                    style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
+                                  >
+
+                                {/* Website Intelligence & Content Classification OR Offline Alert */}
+                                {(currentTab === 'intel' || currentTab === 'all' || (isOffline && currentTab === 'pages')) && (
+                                  isOffline ? (
                               <div
                                 style={{
                                   background: '#fff1f2',
@@ -1534,10 +1654,11 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   </div>
                                 )}
                               </div>
-                            )}
+                            ))}
 
                             {/* Crawled Pages Section */}
-                            <div style={{ background: isOffline ? '#fff8f8' : '#f8fafc', border: `1px solid ${isOffline ? '#fecaca' : '#e2e8f0'}`, borderRadius: '8px', padding: '12px 14px' }}>
+                            {(currentTab === 'pages' || currentTab === 'all') && (
+                              <div style={{ background: isOffline ? '#fff8f8' : '#f8fafc', border: `1px solid ${isOffline ? '#fecaca' : '#e2e8f0'}`, borderRadius: '8px', padding: '12px 14px' }}>
                               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '6px' }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                   <FileText size={14} color={isOffline ? '#dc2626' : '#0284c7'} />
@@ -1752,30 +1873,36 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </div>
                               )}
                             </div>
+                            )}
 
                             {/* Subdomains section */}
-                            <div>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-                                <Network size={14} color="#0284c7" />
-                                <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)' }}>
-                                  Discovered Subdomains ({subdomains.length})
-                                </span>
+                            {(currentTab === 'subdomains' || currentTab === 'all') && (
+                              <div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+                                  <Network size={14} color="#0284c7" />
+                                  <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                    Discovered Subdomains ({subdomains.length})
+                                  </span>
+                                </div>
+                                {subdomains.length === 0 ? (
+                                  <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
+                                    No subdomains discovered for this domain.
+                                  </p>
+                                ) : (
+                                  <SubdomainListExplorer
+                                    subdomains={subdomains}
+                                    domainName={r.domain}
+                                    subdomainDetails={r.subdomainDetails}
+                                  />
+                                )}
                               </div>
-                              {subdomains.length === 0 ? (
-                                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0 }}>
-                                  No subdomains discovered for this domain.
-                                </p>
-                              ) : (
-                                <SubdomainListExplorer
-                                  subdomains={subdomains}
-                                  domainName={r.domain}
-                                  subdomainDetails={r.subdomainDetails}
-                                />
-                              )}
-                            </div>
+                            )}
 
-                            {/* Emails section */}
-                            <div>
+                            {/* Verified Contacts (Emails & Phone Numbers) */}
+                            {(currentTab === 'contacts' || currentTab === 'all') && (
+                              <>
+                                {/* Emails section */}
+                                <div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
                                 <Mail size={14} color="#0284c7" />
                                 <span style={{ fontSize: '12.5px', fontWeight: 700, color: 'var(--text-main)' }}>
@@ -2121,7 +2248,27 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                 </div>
                               </div>
                             )}
-                          </div>
+
+                            {emails.length === 0 && (!r.phones || r.phones.length === 0) && (
+                              <div
+                                style={{
+                                  padding: '16px',
+                                  background: '#f8fafc',
+                                  borderRadius: '8px',
+                                  border: '1px dashed #cbd5e1',
+                                  textAlign: 'center',
+                                  color: '#64748b',
+                                  fontSize: '12px',
+                                }}
+                              >
+                                No public emails or phone numbers verified yet for {r.domain}.
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </motion.div>
+                    </AnimatePresence>
+                  </div>
                         </div>
                       </div>
                     </div>
@@ -2130,7 +2277,8 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
               </React.Fragment>
               );
               })}
-            </tbody>
+              </motion.tbody>
+            </AnimatePresence>
           </table>
         </div>
       )}
