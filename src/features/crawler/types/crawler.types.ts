@@ -92,6 +92,10 @@ export interface ScrapedDataRecord {
   reconciliation?: ReconciliationStats;
   pagesCrawled?: number;
   discoveredAt: string;
+  isTldZone?: boolean;
+  tldZone?: string;
+  childDomains?: ScrapedDataRecord[];
+  childDomainCount?: number;
 }
 
 export interface ActiveWorkerSummary {

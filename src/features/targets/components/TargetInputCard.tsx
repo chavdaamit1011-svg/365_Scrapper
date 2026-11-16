@@ -71,7 +71,7 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
       if (duplicates > 0) {
         setError(`Target already exists in the queue (${duplicates} duplicate).`);
       } else if (invalids > 0) {
-        setError('Invalid domain or subdomain syntax. (e.g. example.com, api.target.net)');
+        setError('Invalid domain, subdomain, or TLD zone syntax. (e.g. .in, *.com, example.com, api.target.net)');
       }
       return null;
     }
@@ -155,7 +155,7 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
               Manual Target Scope Entry
             </h3>
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Enter single or multiple domains/subdomains separated by comma or space
+              Enter single/multiple domains, subdomains, or 24/7 TLD zones (e.g. .in, *.com, example.in)
             </span>
           </div>
         </div>
@@ -186,7 +186,7 @@ export const TargetInputCard: React.FC<TargetInputCardProps> = ({
           <div style={{ flex: 1, minWidth: '280px', position: 'relative' }}>
             <input
               type="text"
-              placeholder="e.g. example.com, api.target.org, dev.portal.net"
+              placeholder="e.g. .in, *.com, example.in, dev.portal.net, gov.in"
               value={inputVal}
               onChange={(e) => {
                 setInputVal(e.target.value);

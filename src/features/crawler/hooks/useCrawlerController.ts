@@ -43,6 +43,8 @@ export function useCrawlerController(
 
   const [isContinuousMode, setIsContinuousMode] = useState<boolean>(true);
   const [cycleCount, setCycleCount] = useState<number>(1);
+  const [liveSessionDomains, setLiveSessionDomains] = useState<string[]>([]);
+  const liveSessionDomainsRef = useRef<Set<string>>(new Set());
 
   // Pool of Concurrent Active Workers (Up to MAX_CONCURRENT_WORKERS = 3)
   const activeWorkersRef = useRef<Map<string, ActiveWorkerData>>(new Map());
@@ -147,7 +149,7 @@ export function useCrawlerController(
     }
 
     const currentWorker = workers[0];
-    const domain = currentWorker.target.domain;
+    const domain = (currentWorker as any).activeSubTarget || currentWorker.target.domain;
     setCurrentTargetName(domain);
 
     setTargetSubProgress(currentWorker.progress || 20);
@@ -179,6 +181,9 @@ export function useCrawlerController(
     if (onTargetStatusChange) {
       onTargetStatusChange(target.id, 'crawling');
     }
+
+    liveSessionDomainsRef.current.add(target.domain.toLowerCase());
+    setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
 
     updateWorkerTelemetry();
 
@@ -302,6 +307,167 @@ export function useCrawlerController(
     }
   };
 
+  // 24/7 TLD Zone Discovery & Continuous Scraping Execution
+  const runTldZoneTargetCycle = async (target: TargetItem) => {
+    activeWorkersRef.current.set(target.id, {
+      target,
+      progress: 15,
+      pagesCrawled: 0,
+      subdomainsCount: 0,
+      emailsCount: 0,
+      phase: `🌐 24/7 TLD Zone Discovery: Scanning root domains for ${target.domain} (Cycle #${cycleCountRef.current})...`,
+    });
+
+    target.status = 'crawling';
+    if (onTargetStatusChange) {
+      onTargetStatusChange(target.id, 'crawling');
+    }
+    liveSessionDomainsRef.current.add(target.domain.toLowerCase());
+    setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
+    setCurrentTargetName(target.domain);
+    updateWorkerTelemetry();
+
+    try {
+      if (isCancelledRef.current) return;
+
+      while (isPausedRef.current && !isCancelledRef.current) {
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (isCancelledRef.current) return;
+
+      // 1. Trigger TLD Discovery API (Certificate Transparency, Dorking, Seeds, Cross-Links)
+      const discRes = await fetch('/api/crawler/tld-discover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tld: target.domain,
+          cycle: cycleCountRef.current,
+          maxPerPass: 35,
+        }),
+      });
+
+      const discJson = await discRes.json();
+      const discoveredList: string[] = Array.isArray(discJson.domains) ? discJson.domains : [];
+
+      if (activeWorkersRef.current.has(target.id)) {
+        const workerData = activeWorkersRef.current.get(target.id)!;
+        workerData.progress = 25;
+        workerData.phase = `🌐 [${target.domain} Zone] Discovered ${discJson.totalDiscovered || discoveredList.length} root domains (Cycle #${cycleCountRef.current})`;
+      }
+      updateWorkerTelemetry();
+
+      // 2. Sequentially crawl discovered root domains with fast landing/contact reconnaissance
+      const interactiveMaxPages = 3;
+      const interactiveMaxDepth = 1;
+
+      for (let i = 0; i < discoveredList.length; i++) {
+        if (isCancelledRef.current) break;
+        while (isPausedRef.current && !isCancelledRef.current) {
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        if (isCancelledRef.current) break;
+
+        const subDomainTarget = discoveredList[i];
+        const stepProgress = Math.min(95, Math.round(((i + 1) / discoveredList.length) * 70) + 25);
+
+        liveSessionDomainsRef.current.add(subDomainTarget.toLowerCase());
+        setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
+
+        if (activeWorkersRef.current.has(target.id)) {
+          const w = activeWorkersRef.current.get(target.id)!;
+          (w as any).activeSubTarget = subDomainTarget;
+          w.progress = stepProgress;
+          w.phase = `⚡ [${target.domain} Stream] Crawling ${subDomainTarget} (${i + 1}/${discoveredList.length}) [Cycle #${cycleCountRef.current}]`;
+        }
+        setCurrentTargetName(subDomainTarget);
+        updateWorkerTelemetry();
+
+        // Enqueue crawl job for discovered domain
+        try {
+          const jobRes = await fetch('/api/crawl-jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              domain: subDomainTarget,
+              max_pages: interactiveMaxPages,
+              max_depth: interactiveMaxDepth,
+              requests_per_second: 2,
+              respect_robots_txt: true,
+              tld_zone: target.domain,
+            }),
+          });
+          const jobJson = await jobRes.json();
+          const jobId = jobJson.job_id;
+
+          // Poll job status until done
+          let isDone = false;
+          let pollAttempts = 0;
+          while (!isDone && pollAttempts < 45 && !isCancelledRef.current && !isPausedRef.current) {
+            await new Promise((r) => setTimeout(r, 600));
+            pollAttempts++;
+            if (jobId) {
+              try {
+                const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
+                const statusJson = await statusRes.json();
+                if (statusJson.success && statusJson.job) {
+                  const j = statusJson.job;
+                  if (j.status === 'completed' || j.status === 'failed') {
+                    isDone = true;
+                  }
+                  if (activeWorkersRef.current.has(target.id)) {
+                    const w = activeWorkersRef.current.get(target.id)!;
+                    w.subdomainsCount = j.subdomainsCount || 0;
+                    w.emailsCount = j.emailsCount || 0;
+                    w.pagesCrawled = j.pagesCrawled || 0;
+                  }
+                  updateWorkerTelemetry();
+                }
+              } catch {}
+            }
+          }
+        } catch (subErr) {
+          console.warn(`[TldZoneWorker] Crawl job failed for ${subDomainTarget}:`, subErr);
+        }
+
+        // Live database sync after each domain completes
+        try {
+          const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
+          const liveJson = await liveRes.json();
+          if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
+            setScrapedResults(liveJson.data);
+          }
+        } catch {}
+      }
+
+      if (isCancelledRef.current) return;
+
+      // Mark TLD pass complete for this cycle
+      target.status = 'completed';
+      if (onTargetStatusChange) {
+        onTargetStatusChange(target.id, 'completed');
+      }
+      setProcessedTargetsCount((prev) => prev + 1);
+
+      // Refresh final database results
+      try {
+        const freshRes = await fetch('/api/crawler/results', { cache: 'no-store' });
+        const freshJson = await freshRes.json();
+        if (freshJson.success && Array.isArray(freshJson.data) && freshJson.data.length > 0) {
+          setScrapedResults(freshJson.data);
+        }
+      } catch (e) {}
+
+      activeWorkersRef.current.delete(target.id);
+      updateWorkerTelemetry();
+    } catch (err) {
+      console.warn(`[TldZoneWorker] Error in zone discovery for ${target.domain}:`, err);
+      target.status = 'completed';
+      if (onTargetStatusChange) onTargetStatusChange(target.id, 'completed');
+      activeWorkersRef.current.delete(target.id);
+      updateWorkerTelemetry();
+    }
+  };
+
   // Continuous Worker Loop: runs indefinitely cycle-by-cycle until user clicks Cancel or Pause
   const startWorkerLoop = useCallback(async () => {
     if (isLoopRunningRef.current) return;
@@ -349,8 +515,12 @@ export function useCrawlerController(
 
         if (!target) continue;
 
-        // Execute deep crawl & subdomain recon for this target
-        await runSingleTargetCycle(target);
+        // Execute deep crawl or 24/7 TLD zone discovery for this target
+        if (target.type === 'tld_zone') {
+          await runTldZoneTargetCycle(target);
+        } else {
+          await runSingleTargetCycle(target);
+        }
 
         // 1s non-blocking interval before next target
         await new Promise((r) => setTimeout(r, 1000));
@@ -537,7 +707,7 @@ export function useCrawlerController(
   const activeWorkersList: ActiveWorkerSummary[] = Array.from(activeWorkersRef.current.entries()).map(
     ([id, w]) => ({
       id,
-      domain: w.target.domain,
+      domain: (w as any).activeSubTarget || w.target.domain,
       progress: w.progress,
       pagesCrawled: w.pagesCrawled,
       subdomainsCount: w.subdomainsCount,
@@ -572,6 +742,7 @@ export function useCrawlerController(
     status,
     stats,
     scrapedResults,
+    liveSessionDomains,
     isContinuousMode,
     setIsContinuousMode,
     cycleCount,

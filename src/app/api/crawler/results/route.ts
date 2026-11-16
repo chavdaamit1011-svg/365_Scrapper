@@ -124,8 +124,60 @@ export async function GET() {
         sourceUrl: d.sourceUrl || '',
         pagesCrawled: d.pagesCrawled && d.pagesCrawled > 0 ? d.pagesCrawled : (hasDiscoveredScope ? 1 : 0),
         discoveredAt: d.discoveredAt || d.createdAt || d.updatedAt || new Date().toISOString(),
+        tldZone: d.tldZone || (d.domain && d.domain.startsWith('.') ? d.domain : (d.domain?.endsWith('.com') && !['gov.pk'].includes(d.domain) ? '.com' : (d.domain?.endsWith('.in') && d.domain !== 'gov.in' ? '.in' : ''))),
+        isTldZone: Boolean(d.isTldZone) || (Boolean(d.domain) && d.domain.startsWith('.')),
       };
     });
+
+    // Synthesize Master TLD record for grouped zones if not explicitly saved as a standalone document
+    const existingTldSet = new Set(results.filter((r: any) => r.isTldZone || (r.domain && r.domain.startsWith('.'))).map((r: any) => r.domain));
+    const tldGroups = new Map<string, any[]>();
+    for (const r of results) {
+      if (r.tldZone && !r.isTldZone && !r.domain.startsWith('.')) {
+        if (!tldGroups.has(r.tldZone)) tldGroups.set(r.tldZone, []);
+        tldGroups.get(r.tldZone)!.push(r);
+      }
+    }
+
+    for (const [tld, childList] of tldGroups.entries()) {
+      if (!existingTldSet.has(tld) && childList.length > 0) {
+        const totalSubs = childList.reduce((acc, c) => acc + (c.subdomainCount || 0), 0);
+        const totalEmails = childList.reduce((acc, c) => acc + (c.emailCount || 0), 0);
+        const totalPages = childList.reduce((acc, c) => acc + (c.pagesCrawled || 0), 0);
+        const hasCrawling = childList.some((c) => c.status === 'CRAWLING');
+
+        results.unshift({
+          id: `tld_zone_${tld.replace(/^\./, '')}`,
+          domain: tld,
+          rootDomain: tld,
+          subdomain: tld,
+          subdomains: [],
+          subdomainCount: totalSubs,
+          email: childList.find((c) => c.email)?.email || '',
+          emails: Array.from(new Set(childList.flatMap((c) => c.emails || []))),
+          emailCount: totalEmails,
+          verifiedEmails: childList.flatMap((c) => c.verifiedEmails || []),
+          phones: Array.from(new Set(childList.flatMap((c) => c.phones || []))),
+          scrapedPhones: childList.flatMap((c) => c.scrapedPhones || []),
+          crawledPages: childList.flatMap((c) => c.crawledPages || []),
+          pagesCrawled: totalPages,
+          category: 'TLD Zone Scope',
+          categoryIcon: '🌐',
+          isEcommerce: childList.some((c) => c.isEcommerce),
+          ecommerceSignals: Array.from(new Set(childList.flatMap((c) => c.ecommerceSignals || []))),
+          technologies: Array.from(new Set(childList.flatMap((c) => c.technologies || []))),
+          summary: `${tld} Top-Level Domain Zone with ${childList.length} discovered root domains and ${totalSubs} aggregate subdomains.`,
+          country: tld.endsWith('.in') ? 'India' : 'Global',
+          countryCode: tld.endsWith('.in') ? 'IN' : 'INT',
+          countryFlag: tld.endsWith('.in') ? '🇮🇳' : '🌐',
+          status: hasCrawling ? 'CRAWLING' : 'RESOLVED',
+          sourceUrl: `https://${tld.replace(/^\./, '')}`,
+          isTldZone: true,
+          tldZone: tld,
+          discoveredAt: childList[0]?.discoveredAt || new Date().toISOString(),
+        });
+      }
+    }
 
     return NextResponse.json({
       success: true,

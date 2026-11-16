@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Download,
@@ -25,19 +25,26 @@ import {
   Sparkles,
   FileText,
   X,
+  Database,
+  Zap,
 } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
-import { ScrapedDataRecord, CrawledPageDetail } from '../types/crawler.types';
+import { ScrapedDataRecord, CrawledPageDetail, ActiveWorkerSummary } from '../types/crawler.types';
+import { TargetItem } from '@/features/targets/types/target.types';
 import { exportCrawlerResultsToCSV } from '../utils/exportCrawlerResults';
 import { SubdomainListExplorer } from './SubdomainListExplorer';
 import { buildPhoneRedirectUrl, ScrapedPhoneDetail } from '@/lib/crawler/phoneExtractor';
 
 interface ScrapedResultsTableProps {
   records: ScrapedDataRecord[];
+  targets?: TargetItem[];
   isCrawling: boolean;
   onClearResults?: () => void;
+  activeTargetDomain?: string;
+  activeWorkers?: ActiveWorkerSummary[];
+  activeCycle?: number;
 }
 
 const EXCLUDED_EMAIL_PREFIXES = new Set([
@@ -133,18 +140,36 @@ function getEffectivePhoneSource(r: ScrapedDataRecord, phoneDetail?: ScrapedPhon
   return rawSource;
 }
 
+export type ExpandedTab = 'domains' | 'pages' | 'subdomains' | 'contacts' | 'intel' | 'all';
+
 export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   records,
+  targets = [],
   isCrawling,
   onClearResults,
+  activeTargetDomain,
+  activeWorkers,
+  activeCycle = 1,
 }) => {
+  const [datasetView, setDatasetView] = useState<'live' | 'database'>('live');
+  const [groupingMode, setGroupingMode] = useState<'grouped' | 'flat'>('grouped');
   const [searchTerm, setSearchTerm] = useState('');
   const [countryFilter, setCountryFilter] = useState<string>('ALL');
   const [scopeFilter, setScopeFilter] = useState<'all' | 'subdomains' | 'contacts' | 'ecommerce'>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedDomainId, setExpandedDomainId] = useState<string | null>(null);
-  const [activeTabMap, setActiveTabMap] = useState<Record<string, 'pages' | 'subdomains' | 'contacts' | 'intel' | 'all'>>({});
+  const [activeTabMap, setActiveTabMap] = useState<Record<string, ExpandedTab>>({});
+  const [childDomainSearch, setChildDomainSearch] = useState<Record<string, string>>({});
+  const [activeChildSubdomainDomain, setActiveChildSubdomainDomain] = useState<ScrapedDataRecord | null>(null);
+  const [expandedChildPagesId, setExpandedChildPagesId] = useState<string | null>(null);
   const [isClearing, setIsClearing] = useState(false);
+
+  // Automatically switch to Live Active Scraping whenever a crawl run is triggered
+  useEffect(() => {
+    if (isCrawling) {
+      setDatasetView('live');
+    }
+  }, [isCrawling]);
 
   // Group and normalize records by root domain so every domain is an organized master entity
   const domainGroups = useMemo(() => {
@@ -356,29 +381,227 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       }
     }
 
-    return Array.from(map.values());
-  }, [records]);
+    const allNormalized = Array.from(map.values());
+
+    if (groupingMode === 'flat') {
+      return allNormalized.filter((r) => !r.isTldZone && !r.domain.startsWith('.'));
+    }
+
+    // Hierarchical Grouping Mode: Group child domains under their respective Master TLD Zone
+    // 1. Identify all active or discovered TLD Zones
+    const tldZoneKeys = new Set<string>();
+
+    if (Array.isArray(targets)) {
+      for (const t of targets) {
+        if (t.type === 'tld_zone' || t.domain.startsWith('.') || t.domain.startsWith('*.')) {
+          const clean = t.domain.replace(/^\*?\./, '').trim().toLowerCase();
+          if (clean) tldZoneKeys.add(`.${clean}`);
+        }
+      }
+    }
+
+    for (const r of allNormalized) {
+      if (r.isTldZone || r.domain.startsWith('.')) {
+        const clean = r.domain.replace(/^\./, '').trim().toLowerCase();
+        if (clean) tldZoneKeys.add(`.${clean}`);
+      }
+      if (r.tldZone) {
+        const clean = r.tldZone.replace(/^\./, '').trim().toLowerCase();
+        if (clean) tldZoneKeys.add(`.${clean}`);
+      }
+    }
+
+    // Heuristic: If multiple domains share a TLD and weren't explicit individual targets, group them
+    const tldDomainCount = new Map<string, number>();
+    for (const r of allNormalized) {
+      if (r.isTldZone || r.domain.startsWith('.')) continue;
+      const d = r.domain.toLowerCase().trim();
+      const dotIdx = d.lastIndexOf('.');
+      if (dotIdx !== -1) {
+        const tld = d.slice(dotIdx);
+        tldDomainCount.set(tld, (tldDomainCount.get(tld) || 0) + 1);
+      }
+    }
+    for (const [tld, cnt] of tldDomainCount.entries()) {
+      if (cnt >= 2) {
+        tldZoneKeys.add(tld);
+      }
+    }
+
+    const explicitIndividualTargetSet = new Set<string>();
+    if (Array.isArray(targets)) {
+      for (const t of targets) {
+        if (t.type !== 'tld_zone' && !t.domain.startsWith('.') && !t.domain.startsWith('*.')) {
+          explicitIndividualTargetSet.add(t.domain.toLowerCase().trim());
+        }
+      }
+    }
+
+    const finalGroups: ScrapedDataRecord[] = [];
+    const groupedChildDomainIds = new Set<string>();
+
+    for (const tld of tldZoneKeys) {
+      const childList: ScrapedDataRecord[] = [];
+      for (const r of allNormalized) {
+        if (r.isTldZone || r.domain.startsWith('.')) continue;
+        const d = r.domain.toLowerCase().trim();
+        const matchesTld = r.tldZone === tld || d.endsWith(tld);
+        const isExplicitIndividual = explicitIndividualTargetSet.has(d);
+
+        if (matchesTld && !isExplicitIndividual) {
+          childList.push(r);
+          groupedChildDomainIds.add(r.id);
+        }
+      }
+
+      if (childList.length > 0) {
+        const allSubs = Array.from(new Set(childList.flatMap((c) => c.subdomains || []))).sort();
+        const totalSubsCount = childList.reduce((acc, c) => acc + (c.subdomainCount || c.subdomains?.length || 0), 0);
+        const allEmails = Array.from(new Set(childList.flatMap((c) => c.emails || [])));
+        const allPhones = Array.from(new Set(childList.flatMap((c) => c.phones || [])));
+        const allScrapedPhones = childList.flatMap((c) => c.scrapedPhones || []);
+        const allPages = childList.flatMap((c) => c.crawledPages || []);
+        const totalPagesCount = childList.reduce((acc, c) => acc + (c.pagesCrawled || c.crawledPages?.length || 0), 0);
+        const hasCrawling = childList.some((c) => c.status === 'CRAWLING');
+
+        const existingMaster = allNormalized.find((r) => r.domain === tld || r.domain === tld.replace(/^\./, ''));
+        const isIndia = tld.endsWith('.in');
+
+        const masterTldRecord: ScrapedDataRecord = {
+          id: existingMaster?.id || `tld_zone_${tld.replace(/^\./, '')}`,
+          domain: tld,
+          rootDomain: tld,
+          subdomain: tld,
+          subdomains: allSubs,
+          subdomainCount: allSubs.length > 0 ? allSubs.length : totalSubsCount,
+          email: allEmails[0] || '',
+          emails: allEmails,
+          emailCount: allEmails.length,
+          phones: allPhones,
+          scrapedPhones: allScrapedPhones,
+          crawledPages: allPages,
+          pagesCrawled: totalPagesCount,
+          category: 'TLD Zone Scope',
+          categoryIcon: '🌐',
+          isEcommerce: childList.some((c) => c.isEcommerce),
+          summary: `${tld} Top-Level Domain Zone with ${childList.length} discovered root domains and ${totalSubsCount} aggregate subdomains.`,
+          country: isIndia ? 'India' : 'Global',
+          countryCode: isIndia ? 'IN' : 'INT',
+          countryFlag: isIndia ? '🇮🇳' : '🌐',
+          status: hasCrawling ? 'CRAWLING' : 'RESOLVED',
+          sourceUrl: `https://${tld.replace(/^\./, '')}`,
+          isTldZone: true,
+          tldZone: tld,
+          childDomains: childList,
+          childDomainCount: childList.length,
+          discoveredAt: childList[0]?.discoveredAt || new Date().toISOString(),
+        };
+
+        finalGroups.push(masterTldRecord);
+      }
+    }
+
+    // Add independent targets not part of any TLD zone
+    for (const r of allNormalized) {
+      if (r.isTldZone || r.domain.startsWith('.')) continue;
+      if (!groupedChildDomainIds.has(r.id)) {
+        finalGroups.push(r);
+      }
+    }
+
+    return finalGroups;
+  }, [records, targets, groupingMode]);
+
+  // Set of actively crawling domains from props
+  const activeCrawlingDomainSet = useMemo(() => {
+    const set = new Set<string>();
+    if (activeTargetDomain) {
+      set.add(activeTargetDomain.toLowerCase().trim());
+    }
+    if (Array.isArray(activeWorkers)) {
+      for (const w of activeWorkers) {
+        if (w.domain) {
+          set.add(w.domain.toLowerCase().trim());
+        }
+      }
+    }
+    return set;
+  }, [activeTargetDomain, activeWorkers]);
+
+  // Partition domainGroups into liveGroups vs databaseGroups
+  // Live Active Scraping: ONLY domains that are actively crawling right now!
+  // Previously Scraped Database: All domains whose scraping has completed and are stored in DB!
+  const { liveGroups, databaseGroups } = useMemo(() => {
+    const live: ScrapedDataRecord[] = [];
+    const db: ScrapedDataRecord[] = [];
+
+    for (const group of domainGroups) {
+      const dLower = group.domain.toLowerCase().trim();
+      const isCurrentlyScraping =
+        group.status === 'CRAWLING' ||
+        (isCrawling && activeCrawlingDomainSet.has(dLower));
+
+      if (isCurrentlyScraping) {
+        live.push(group);
+      } else {
+        db.push(group);
+      }
+    }
+
+    // Synthesize active crawling targets if not yet in domainGroups
+    if (isCrawling) {
+      for (const activeDomain of activeCrawlingDomainSet) {
+        if (!activeDomain || activeDomain.startsWith('.')) continue;
+        const existsInLive = live.some((g) => g.domain.toLowerCase().trim() === activeDomain);
+        if (!existsInLive) {
+          live.push({
+            id: `live_active_${activeDomain}`,
+            domain: activeDomain,
+            subdomain: activeDomain,
+            subdomains: [],
+            subdomainCount: 0,
+            email: '',
+            emails: [],
+            phones: [],
+            crawledPages: [],
+            pagesCrawled: 0,
+            category: 'Deep Recon & Subdomain Discovery...',
+            categoryIcon: '⚡',
+            country: 'India',
+            countryCode: 'IN',
+            countryFlag: '🇮🇳',
+            status: 'CRAWLING',
+            discoveredAt: new Date().toISOString(),
+          });
+        }
+      }
+    }
+
+    return { liveGroups: live, databaseGroups: db };
+  }, [domainGroups, isCrawling, activeCrawlingDomainSet]);
+
+  const activeDatasetGroups = datasetView === 'live' ? liveGroups : databaseGroups;
 
   // Distinct countries for filter dropdown
   const uniqueCountries = useMemo(() => {
-    const set = new Set(domainGroups.map((r) => r.country).filter(Boolean));
+    const set = new Set(activeDatasetGroups.map((r) => r.country).filter(Boolean));
     return Array.from(set).sort();
-  }, [domainGroups]);
+  }, [activeDatasetGroups]);
 
   // Scope counts for animated Framer Motion filter buttons
   const subCount = useMemo(
-    () => domainGroups.filter((r) => (r.subdomains && r.subdomains.length > 0) || (typeof r.subdomainCount === 'number' && r.subdomainCount > 0)).length,
-    [domainGroups]
+    () => activeDatasetGroups.filter((r) => (r.subdomains && r.subdomains.length > 0) || (typeof r.subdomainCount === 'number' && r.subdomainCount > 0)).length,
+    [activeDatasetGroups]
   );
   const contactCount = useMemo(
-    () => domainGroups.filter((r) => (r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0)).length,
-    [domainGroups]
+    () => activeDatasetGroups.filter((r) => (r.emails && r.emails.length > 0) || (r.phones && r.phones.length > 0)).length,
+    [activeDatasetGroups]
   );
-  const ecomCount = useMemo(() => domainGroups.filter((r) => Boolean(r.isEcommerce)).length, [domainGroups]);
+  const ecomCount = useMemo(() => activeDatasetGroups.filter((r) => Boolean(r.isEcommerce)).length, [activeDatasetGroups]);
 
   // Filtered dataset
   const filteredGroups = useMemo(() => {
-    return domainGroups.filter((r) => {
+    return activeDatasetGroups.filter((r) => {
       const q = searchTerm.toLowerCase().trim();
       const subs = (r.subdomains || []).join(' ').toLowerCase();
       const ems = (r.emails || []).join(' ').toLowerCase();
@@ -401,9 +624,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
 
       return matchesSearch && matchesCountry && matchesScope;
     });
-  }, [domainGroups, searchTerm, countryFilter, scopeFilter]);
-
-  type ExpandedTab = 'pages' | 'subdomains' | 'contacts' | 'intel' | 'all';
+  }, [activeDatasetGroups, searchTerm, countryFilter, scopeFilter]);
 
   const toggleSection = (domainId: string, tab: ExpandedTab) => {
     if (expandedDomainId === domainId && (activeTabMap[domainId] || 'pages') === tab) {
@@ -414,8 +635,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
     }
   };
 
-  const toggleExpand = (domainId: string) => {
-    toggleSection(domainId, activeTabMap[domainId] || 'all');
+  const toggleExpand = (domainId: string, record?: ScrapedDataRecord) => {
+    const defaultTab = record?.isTldZone ? 'domains' : (activeTabMap[domainId] || 'pages');
+    toggleSection(domainId, activeTabMap[domainId] || defaultTab);
   };
 
   const handleCopy = (text: string, id: string) => {
@@ -462,15 +684,122 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   };
 
   const totalSubdomainsFound = useMemo(() => {
-    return domainGroups.reduce((acc, curr) => acc + (curr.subdomains?.length || 0), 0);
-  }, [domainGroups]);
+    return activeDatasetGroups.reduce((acc, curr) => acc + (curr.subdomains?.length || curr.subdomainCount || 0), 0);
+  }, [activeDatasetGroups]);
 
   const totalEmailsFound = useMemo(() => {
-    return domainGroups.reduce((acc, curr) => acc + (curr.emails?.length || 0), 0);
-  }, [domainGroups]);
+    return activeDatasetGroups.reduce((acc, curr) => acc + (curr.emails?.length || curr.emailCount || 0), 0);
+  }, [activeDatasetGroups]);
 
   return (
     <Card style={{ padding: '24px' }}>
+      {/* Primary Dual-Dataset View Switcher: Live Active Scraping vs Previously Scraped Database */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '10px',
+          marginBottom: '20px',
+          paddingBottom: '16px',
+          borderBottom: '1px solid #f1f5f9',
+          flexWrap: 'wrap',
+        }}
+      >
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          type="button"
+          onClick={() => setDatasetView('live')}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 18px',
+            borderRadius: '10px',
+            fontSize: '13px',
+            fontWeight: 700,
+            border: datasetView === 'live' ? '1.5px solid #0284c7' : '1px solid #e2e8f0',
+            background: datasetView === 'live' ? '#f0f9ff' : '#ffffff',
+            color: datasetView === 'live' ? '#0369a1' : '#64748b',
+            cursor: 'pointer',
+            boxShadow: datasetView === 'live' ? '0 2px 6px rgba(2, 132, 199, 0.14)' : 'none',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <span
+            style={{
+              width: '8px',
+              height: '8px',
+              borderRadius: '50%',
+              background: isCrawling ? '#ef4444' : '#10b981',
+              animation: isCrawling ? 'pulse 1.2s infinite ease-in-out' : 'none',
+            }}
+          />
+          <span>🔴 Live Active Scraping</span>
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: '9999px',
+              background: datasetView === 'live' ? '#0284c7' : '#e2e8f0',
+              color: datasetView === 'live' ? '#ffffff' : '#475569',
+            }}
+          >
+            {liveGroups.length}
+          </span>
+        </motion.button>
+
+        <motion.button
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          type="button"
+          onClick={() => setDatasetView('database')}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '8px 18px',
+            borderRadius: '10px',
+            fontSize: '13px',
+            fontWeight: 700,
+            border: datasetView === 'database' ? '1.5px solid #6366f1' : '1px solid #e2e8f0',
+            background: datasetView === 'database' ? '#eef2ff' : '#ffffff',
+            color: datasetView === 'database' ? '#4338ca' : '#64748b',
+            cursor: 'pointer',
+            boxShadow: datasetView === 'database' ? '0 2px 6px rgba(99, 102, 241, 0.14)' : 'none',
+            transition: 'all 0.15s ease',
+          }}
+        >
+          <Database size={15} color={datasetView === 'database' ? '#4f46e5' : '#64748b'} />
+          <span>📦 Previously Scraped Database</span>
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 700,
+              padding: '2px 8px',
+              borderRadius: '9999px',
+              background: datasetView === 'database' ? '#4f46e5' : '#e2e8f0',
+              color: datasetView === 'database' ? '#ffffff' : '#475569',
+            }}
+          >
+            {databaseGroups.length}
+          </span>
+        </motion.button>
+
+        <div style={{ marginLeft: 'auto', fontSize: '12px' }}>
+          {datasetView === 'live' ? (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', color: '#0369a1', fontWeight: 600 }}>
+              <span className="pulse-dot" /> Live Active Session Stream ({liveGroups.length} Targets)
+            </span>
+          ) : (
+            <span style={{ color: '#475569', fontWeight: 600 }}>
+              📦 Complete Historical Database ({databaseGroups.length} Domains Saved in MongoDB)
+            </span>
+          )}
+        </div>
+      </div>
+
       {/* Header and Controls Row */}
       <div
         style={{
@@ -497,7 +826,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 color: '#0369a1',
               }}
             >
-              {domainGroups.length} Domain{domainGroups.length === 1 ? '' : 's'} Organized
+              {activeDatasetGroups.length} Domain{activeDatasetGroups.length === 1 ? '' : 's'} Organized
             </span>
             {totalSubdomainsFound > 0 && (
               <span
@@ -663,6 +992,71 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             </div>
           )}
 
+          {/* Hierarchy Grouping Toggle (Grouped Scope vs Flat List) */}
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              background: '#f1f5f9',
+              padding: '3px',
+              borderRadius: '8px',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              type="button"
+              onClick={() => setGroupingMode('grouped')}
+              style={{
+                position: 'relative',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '11.5px',
+                fontWeight: 700,
+                border: 'none',
+                background: groupingMode === 'grouped' ? '#ffffff' : 'transparent',
+                color: groupingMode === 'grouped' ? '#4338ca' : '#64748b',
+                cursor: 'pointer',
+                boxShadow: groupingMode === 'grouped' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                transition: 'all 0.15s ease',
+              }}
+              title="Group discovered domains under their TLD Zone scope (.com, .in)"
+            >
+              <Layers size={12} color={groupingMode === 'grouped' ? '#4338ca' : '#64748b'} />
+              <span>Grouped Scope</span>
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.02 }}
+              whileTap={{ scale: 0.97 }}
+              type="button"
+              onClick={() => setGroupingMode('flat')}
+              style={{
+                position: 'relative',
+                padding: '4px 10px',
+                borderRadius: '6px',
+                fontSize: '11.5px',
+                fontWeight: 700,
+                border: 'none',
+                background: groupingMode === 'flat' ? '#ffffff' : 'transparent',
+                color: groupingMode === 'flat' ? '#4338ca' : '#64748b',
+                cursor: 'pointer',
+                boxShadow: groupingMode === 'flat' ? '0 1px 3px rgba(0,0,0,0.08)' : 'none',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '5px',
+                transition: 'all 0.15s ease',
+              }}
+              title="View all domains as a flat list"
+            >
+              <FileText size={12} color={groupingMode === 'flat' ? '#4338ca' : '#64748b'} />
+              <span>Flat List</span>
+            </motion.button>
+          </div>
+
           {/* Export CSV button */}
           <Button
             variant="secondary"
@@ -700,15 +1094,70 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             border: '1px dashed #cbd5e1',
           }}
         >
-          <Layers size={36} color="#94a3b8" style={{ margin: '0 auto 12px' }} />
-          <h4 style={{ fontSize: '15px', fontWeight: 600, color: 'var(--text-main)', margin: '0 0 6px' }}>
-            {domainGroups.length === 0 ? 'No Scraped Intelligence in Database' : 'No Matching Domains Found'}
-          </h4>
-          <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 auto', maxWidth: '440px' }}>
-            {domainGroups.length === 0
-              ? 'Add domain targets above and click "Add & Crawl Now" to automatically discover its subdomains, verified emails, and geo intelligence.'
-              : 'Try adjusting your search keyword or country filter to view matching domain records.'}
-          </p>
+          {datasetView === 'live' ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div
+                style={{
+                  width: '46px',
+                  height: '46px',
+                  borderRadius: '50%',
+                  background: '#e0f2fe',
+                  color: '#0284c7',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 12px',
+                }}
+              >
+                <Zap size={22} />
+              </div>
+              <h4 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', margin: '0 0 6px' }}>
+                {isCrawling ? 'Discovering & Scraping Targets in Live Stream...' : 'No Active Crawling Session Running'}
+              </h4>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 auto 16px', maxWidth: '460px', lineHeight: 1.5 }}>
+                {isCrawling
+                  ? 'The crawler is currently discovering and connecting to domain targets. Discovered root domains, subdomains, and contacts will stream here live.'
+                  : `Enter .in, .com, or specific domain targets above to initiate an active stream, or switch to "Previously Scraped Database" (${databaseGroups.length} saved) to inspect all historical data.`}
+              </p>
+              {!isCrawling && databaseGroups.length > 0 && (
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => setDatasetView('database')}
+                  leftIcon={<Database size={13} color="#4f46e5" />}
+                  style={{ fontWeight: 600 }}
+                >
+                  Switch to Previously Scraped Database ({databaseGroups.length} Domains)
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+              <div
+                style={{
+                  width: '46px',
+                  height: '46px',
+                  borderRadius: '50%',
+                  background: '#eef2ff',
+                  color: '#4f46e5',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 12px',
+                }}
+              >
+                <Database size={22} />
+              </div>
+              <h4 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', margin: '0 0 6px' }}>
+                {databaseGroups.length === 0 ? 'No Scraped Intelligence in Database' : 'No Matching Domains Found'}
+              </h4>
+              <p style={{ fontSize: '13px', color: 'var(--text-muted)', margin: '0 auto', maxWidth: '440px', lineHeight: 1.5 }}>
+                {databaseGroups.length === 0
+                  ? 'Add domain targets above and click "Add & Crawl Now" to automatically discover subdomains, verified emails, and geo intelligence.'
+                  : 'Try adjusting your search keyword or country filter to view matching domain records.'}
+              </p>
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ overflowX: 'auto', border: '1px solid var(--border-subtle)', borderRadius: '10px' }}>
@@ -744,8 +1193,9 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 transition={{ duration: 0.18, ease: 'easeOut' }}
               >
               {filteredGroups.map((r, idx) => {
+                const isTldRecord = Boolean(r.isTldZone);
                 const isExpanded = expandedDomainId === r.id;
-                const currentTab = activeTabMap[r.id] || 'pages';
+                const currentTab = activeTabMap[r.id] || (isTldRecord ? 'domains' : 'pages');
                 const subdomains = r.subdomains || [];
                 const emails = r.emails || [];
                 const crawledPages = r.crawledPages || [];
@@ -768,25 +1218,43 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                     <tr
                       style={{
                         borderBottom: isExpanded ? 'none' : idx < filteredGroups.length - 1 ? '1px solid #f1f5f9' : 'none',
-                        background: isExpanded ? (isOffline ? '#fff8f8' : '#f8fafc') : 'transparent',
+                        background: isExpanded ? (isOffline ? '#fff8f8' : isTldRecord ? '#f5f3ff' : '#f8fafc') : (isTldRecord ? '#faf5ff' : 'transparent'),
                         transition: 'background 0.15s ease',
                       }}
                       onMouseEnter={(e) => {
-                        if (!isExpanded) e.currentTarget.style.background = isOffline ? '#fff5f5' : '#fcfdfe';
+                        if (!isExpanded) e.currentTarget.style.background = isOffline ? '#fff5f5' : (isTldRecord ? '#f3e8ff' : '#fcfdfe');
                       }}
                       onMouseLeave={(e) => {
-                        if (!isExpanded) e.currentTarget.style.background = 'transparent';
+                        if (!isExpanded) e.currentTarget.style.background = isTldRecord ? '#faf5ff' : 'transparent';
                       }}
                     >
                       {/* Column 1: Target Domain & Content Intelligence */}
                       <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <Globe size={16} color={isOffline ? '#dc2626' : '#0284c7'} style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <Globe size={isTldRecord ? 18 : 16} color={isTldRecord ? '#6d28d9' : (isOffline ? '#dc2626' : '#0284c7')} style={{ flexShrink: 0, marginTop: '2px' }} />
                           <div>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
-                              <span style={{ fontWeight: 700, color: 'var(--text-main)', fontSize: '13.5px' }}>
+                              <span style={{ fontWeight: 800, color: isTldRecord ? '#5b21b6' : 'var(--text-main)', fontSize: isTldRecord ? '14.5px' : '13.5px' }}>
                                 {r.domain}
                               </span>
+                              {isTldRecord && (
+                                <span
+                                  style={{
+                                    fontSize: '10px',
+                                    fontWeight: 700,
+                                    color: '#6d28d9',
+                                    background: '#ede9fe',
+                                    padding: '2px 7px',
+                                    borderRadius: '4px',
+                                    border: '1px solid #ddd6fe',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                  }}
+                                >
+                                  🌐 TLD ZONE SCOPE
+                                </span>
+                              )}
                               {isCurrentlyCrawling ? (
                                 <span
                                   style={{
@@ -842,8 +1310,61 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   🛒 E-Commerce
                                 </span>
                               ) : null}
+
+                              {/* 24/7 Reconciliation Lifecycle Badges */}
+                              {!isCurrentlyCrawling && !isOffline && !isTldRecord && (
+                                r.reconciliation?.domain_action === 'NEW' ? (
+                                  <span
+                                    style={{
+                                      fontSize: '10px',
+                                      fontWeight: 700,
+                                      color: '#047857',
+                                      background: '#ecfdf5',
+                                      padding: '1px 6px',
+                                      borderRadius: '4px',
+                                      border: '1px solid #a7f3d0',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                    }}
+                                    title="Newly discovered domain in active 24/7 TLD cycle"
+                                  >
+                                    ✨ NEW
+                                  </span>
+                                ) : r.reconciliation?.domain_action === 'CHANGED' || (r.reconciliation?.new_subdomains && r.reconciliation.new_subdomains > 0) ? (
+                                  <span
+                                    style={{
+                                      fontSize: '10px',
+                                      fontWeight: 700,
+                                      color: '#0369a1',
+                                      background: '#e0f2fe',
+                                      padding: '1px 6px',
+                                      borderRadius: '4px',
+                                      border: '1px solid #bae6fd',
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: '3px',
+                                    }}
+                                    title="Domain intelligence verified and updated across cycles"
+                                  >
+                                    🔄 UPDATED
+                                  </span>
+                                ) : null
+                              )}
                             </div>
-                            {isCurrentlyCrawling ? (
+                            {isTldRecord ? (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748b', marginTop: '3px' }}>
+                                <span style={{ color: '#4338ca', fontWeight: 700 }}>
+                                  🌐 {r.childDomains?.length || r.childDomainCount || 0} Root Domains
+                                </span>
+                                <span>•</span>
+                                <span style={{ color: '#0369a1', fontWeight: 600 }}>
+                                  ⚡ {r.subdomainCount} Subdomains
+                                </span>
+                                <span>•</span>
+                                <span>📄 {r.pagesCrawled || 0} Pages</span>
+                              </div>
+                            ) : isCurrentlyCrawling ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', marginTop: '3px' }}>
                                 <span style={{ color: '#0284c7', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                   <span style={{ width: '5px', height: '5px', borderRadius: '50%', background: '#0284c7' }} />
@@ -922,9 +1443,112 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                         </div>
                       </td>
 
-                      {/* Column 2: Subdomains Preview / Count */}
+                      {/* Column 2: Subdomains Preview / Count OR TLD Zone Discovered Domains */}
                       <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
-                        {subdomains.length === 0 ? (
+                        {isTldRecord ? (
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                              <motion.button
+                                whileHover={{ scale: 1.05 }}
+                                whileTap={{ scale: 0.95 }}
+                                type="button"
+                                onClick={() => toggleSection(r.id, 'domains')}
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '11.5px',
+                                  fontWeight: 700,
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  background: isExpanded && currentTab === 'domains' ? '#4f46e5' : '#eef2ff',
+                                  color: isExpanded && currentTab === 'domains' ? '#ffffff' : '#4338ca',
+                                  border: `1px solid ${isExpanded && currentTab === 'domains' ? '#4f46e5' : '#c7d2fe'}`,
+                                  cursor: 'pointer',
+                                  transition: 'all 0.15s ease',
+                                }}
+                                title="Click to view all discovered root domains in this TLD Zone"
+                              >
+                                <Globe size={11} color={isExpanded && currentTab === 'domains' ? '#ffffff' : '#4338ca'} />
+                                <span>{r.childDomains?.length || r.childDomainCount || 0} Discovered Domains</span>
+                                <ChevronDown
+                                  size={10}
+                                  style={{
+                                    transform: isExpanded && currentTab === 'domains' ? 'rotate(180deg)' : 'none',
+                                    transition: 'transform 0.2s ease',
+                                  }}
+                                />
+                              </motion.button>
+                              {(r.childDomains || []).slice(0, 2).map((c) => (
+                                <a
+                                  key={c.domain}
+                                  href={`https://${c.domain}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: '3px',
+                                    fontSize: '11px',
+                                    fontWeight: 600,
+                                    padding: '2px 7px',
+                                    borderRadius: '5px',
+                                    background: '#f1f5f9',
+                                    color: '#4338ca',
+                                    border: '1px solid #e0e7ff',
+                                    textDecoration: 'none',
+                                  }}
+                                  onMouseEnter={(e) => {
+                                    e.currentTarget.style.background = '#eef2ff';
+                                  }}
+                                  onMouseLeave={(e) => {
+                                    e.currentTarget.style.background = '#f1f5f9';
+                                  }}
+                                >
+                                  <span>{c.domain}</span>
+                                  <ExternalLink size={9} />
+                                </a>
+                              ))}
+                              {(r.childDomains?.length || 0) > 2 && (
+                                <motion.button
+                                  whileHover={{ scale: 1.08 }}
+                                  whileTap={{ scale: 0.95 }}
+                                  type="button"
+                                  onClick={() => toggleSection(r.id, 'domains')}
+                                  style={{
+                                    background: 'none',
+                                    border: 'none',
+                                    cursor: 'pointer',
+                                    color: '#4f46e5',
+                                    fontSize: '11px',
+                                    fontWeight: 700,
+                                    padding: '2px 4px',
+                                  }}
+                                >
+                                  +{(r.childDomains?.length || 0) - 2} more
+                                </motion.button>
+                              )}
+                            </div>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748b' }}>
+                              <button
+                                type="button"
+                                onClick={() => toggleSection(r.id, 'subdomains')}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  padding: 0,
+                                  cursor: 'pointer',
+                                  color: '#0284c7',
+                                  fontWeight: 600,
+                                  fontSize: '11px',
+                                  textDecoration: 'underline',
+                                }}
+                              >
+                                {r.subdomainCount} total subdomains ▾
+                              </button>
+                            </div>
+                          </div>
+                        ) : subdomains.length === 0 ? (
                           <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
@@ -1139,7 +1763,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => toggleExpand(r.id)}
+                          onClick={() => toggleExpand(r.id, r)}
                           rightIcon={
                             <ChevronDown
                               size={13}
@@ -1158,7 +1782,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                     {/* Expandable Details Row with Smooth Accordion Animation */}
                     <tr
                       style={{
-                        background: isExpanded ? '#f8fafc' : 'transparent',
+                        background: isExpanded ? (isTldRecord ? '#faf5ff' : '#f8fafc') : 'transparent',
                         borderBottom: isExpanded ? '1px solid #e2e8f0' : 'none',
                         transition: 'background 0.25s ease',
                       }}
@@ -1198,13 +1822,13 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                               <div
                                 style={{
                                   background: '#ffffff',
-                                  border: '1px solid #e2e8f0',
+                                  border: isTldRecord ? '1px solid #ddd6fe' : '1px solid #e2e8f0',
                                   borderRadius: '8px',
                                   padding: '16px',
                                   display: 'flex',
                                   flexDirection: 'column',
                                   gap: '14px',
-                                  boxShadow: '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
+                                  boxShadow: isTldRecord ? '0 2px 8px rgba(109, 40, 217, 0.06)' : '0 1px 3px 0 rgba(0, 0, 0, 0.04)',
                                 }}
                               >
                                 {/* Section Switcher Tabs & Quick Navigation Header */}
@@ -1231,41 +1855,85 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                       border: '1px solid #e2e8f0',
                                     }}
                                   >
-                                    {[
-                                      {
-                                        id: 'pages' as const,
-                                        label: 'Pages',
-                                        count: isOffline ? 0 : (crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1)),
-                                        icon: <FileText size={13} />,
-                                        activeBg: '#0284c7',
-                                      },
-                                      {
-                                        id: 'subdomains' as const,
-                                        label: 'Subdomains',
-                                        count: subdomains.length,
-                                        icon: <Network size={13} />,
-                                        activeBg: '#0284c7',
-                                      },
-                                      {
-                                        id: 'contacts' as const,
-                                        label: 'Contacts',
-                                        count: emails.length + (r.phones?.length || 0),
-                                        icon: <Mail size={13} />,
-                                        activeBg: '#059669',
-                                      },
-                                      {
-                                        id: 'intel' as const,
-                                        label: 'Intel & Tech',
-                                        icon: <Cpu size={13} />,
-                                        activeBg: '#475569',
-                                      },
-                                      {
-                                        id: 'all' as const,
-                                        label: 'All Combined',
-                                        icon: <Layers size={13} />,
-                                        activeBg: '#0f172a',
-                                      },
-                                    ].map((tab) => {
+                                    {(isTldRecord
+                                      ? [
+                                          {
+                                            id: 'domains' as const,
+                                            label: 'Discovered Domains',
+                                            count: r.childDomains?.length || 0,
+                                            icon: <Globe size={13} />,
+                                            activeBg: '#4f46e5',
+                                          },
+                                          {
+                                            id: 'subdomains' as const,
+                                            label: 'All Subdomains',
+                                            count: subdomains.length || (r.subdomainCount || 0),
+                                            icon: <Network size={13} />,
+                                            activeBg: '#0284c7',
+                                          },
+                                          {
+                                            id: 'contacts' as const,
+                                            label: 'Contacts',
+                                            count: emails.length + (r.phones?.length || 0),
+                                            icon: <Mail size={13} />,
+                                            activeBg: '#059669',
+                                          },
+                                          {
+                                            id: 'pages' as const,
+                                            label: 'Crawled Pages',
+                                            count: isOffline ? 0 : (crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1)),
+                                            icon: <FileText size={13} />,
+                                            activeBg: '#0284c7',
+                                          },
+                                          {
+                                            id: 'intel' as const,
+                                            label: 'Zone Scope & Intel',
+                                            icon: <Cpu size={13} />,
+                                            activeBg: '#475569',
+                                          },
+                                          {
+                                            id: 'all' as const,
+                                            label: 'All Combined',
+                                            icon: <Layers size={13} />,
+                                            activeBg: '#0f172a',
+                                          },
+                                        ]
+                                      : [
+                                          {
+                                            id: 'pages' as const,
+                                            label: 'Pages',
+                                            count: isOffline ? 0 : (crawledPages.length > 0 ? crawledPages.length : (r.pagesCrawled || 1)),
+                                            icon: <FileText size={13} />,
+                                            activeBg: '#0284c7',
+                                          },
+                                          {
+                                            id: 'subdomains' as const,
+                                            label: 'Subdomains',
+                                            count: subdomains.length,
+                                            icon: <Network size={13} />,
+                                            activeBg: '#0284c7',
+                                          },
+                                          {
+                                            id: 'contacts' as const,
+                                            label: 'Contacts',
+                                            count: emails.length + (r.phones?.length || 0),
+                                            icon: <Mail size={13} />,
+                                            activeBg: '#059669',
+                                          },
+                                          {
+                                            id: 'intel' as const,
+                                            label: 'Intel & Tech',
+                                            icon: <Cpu size={13} />,
+                                            activeBg: '#475569',
+                                          },
+                                          {
+                                            id: 'all' as const,
+                                            label: 'All Combined',
+                                            icon: <Layers size={13} />,
+                                            activeBg: '#0f172a',
+                                          },
+                                        ]
+                                    ).map((tab) => {
                                       const isActive = currentTab === tab.id;
                                       return (
                                         <motion.button
@@ -1359,8 +2027,434 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                     style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}
                                   >
 
+                                {/* Discovered Root Domains Section (TLD Zone Scope) */}
+                                {(currentTab === 'domains' || (currentTab === 'all' && isTldRecord)) && (
+                                  <div
+                                    style={{
+                                      background: '#f8fafc',
+                                      border: '1px solid #e2e8f0',
+                                      borderRadius: '8px',
+                                      padding: '16px',
+                                      display: 'flex',
+                                      flexDirection: 'column',
+                                      gap: '12px',
+                                    }}
+                                  >
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                        <Globe size={16} color="#4f46e5" />
+                                        <div>
+                                          <span style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-main)' }}>
+                                            Discovered Root Domains under {r.domain} Zone Scope ({r.childDomains?.length || 0})
+                                          </span>
+                                          <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: '8px' }}>
+                                            Every individual domain scanned under this single TLD crawl with its own subdomains & verified contacts
+                                          </span>
+                                        </div>
+                                      </div>
+
+                                      {/* Child Domain Filter Search */}
+                                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                                        <Search size={12} style={{ position: 'absolute', left: '8px', color: '#94a3b8' }} />
+                                        <input
+                                          type="text"
+                                          placeholder="Filter discovered domains..."
+                                          value={childDomainSearch[r.id] || ''}
+                                          onChange={(e) => setChildDomainSearch((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                                          style={{
+                                            padding: '4px 8px 4px 26px',
+                                            fontSize: '11.5px',
+                                            borderRadius: '6px',
+                                            border: '1px solid #cbd5e1',
+                                            background: '#ffffff',
+                                            outline: 'none',
+                                            width: '180px',
+                                          }}
+                                        />
+                                      </div>
+                                    </div>
+
+                                    {/* List of Discovered Domain Cards */}
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                                      {(r.childDomains || [])
+                                        .filter((child) => {
+                                          const q = (childDomainSearch[r.id] || '').toLowerCase().trim();
+                                          if (!q) return true;
+                                          return (
+                                            child.domain.toLowerCase().includes(q) ||
+                                            (child.subdomains || []).join(' ').toLowerCase().includes(q) ||
+                                            (child.emails || []).join(' ').toLowerCase().includes(q)
+                                          );
+                                        })
+                                        .map((child, cIdx) => {
+                                          const isPagesOpen = expandedChildPagesId === child.id;
+                                          const childSubs = child.subdomains || [];
+                                          const childEmails = child.emails || [];
+                                          const childPages = child.crawledPages || [];
+                                          const childPhones = child.phones || [];
+
+                                          return (
+                                            <div
+                                              key={child.id || cIdx}
+                                              style={{
+                                                background: '#ffffff',
+                                                border: '1px solid #e2e8f0',
+                                                borderRadius: '8px',
+                                                padding: '12px 14px',
+                                                display: 'flex',
+                                                flexDirection: 'column',
+                                                gap: '8px',
+                                                boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
+                                                transition: 'all 0.15s ease',
+                                              }}
+                                            >
+                                              <div
+                                                style={{
+                                                  display: 'flex',
+                                                  alignItems: 'center',
+                                                  justifyContent: 'space-between',
+                                                  flexWrap: 'wrap',
+                                                  gap: '12px',
+                                                }}
+                                              >
+                                                {/* 1. Target Domain & Intel */}
+                                                <div style={{ minWidth: '200px' }}>
+                                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                    <Globe size={14} color="#0284c7" />
+                                                    <a
+                                                      href={`https://${child.domain}`}
+                                                      target="_blank"
+                                                      rel="noopener noreferrer"
+                                                      style={{
+                                                        fontWeight: 700,
+                                                        fontSize: '13.5px',
+                                                        color: '#0f172a',
+                                                        textDecoration: 'none',
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '4px',
+                                                      }}
+                                                      onMouseEnter={(e) => (e.currentTarget.style.color = '#0284c7')}
+                                                      onMouseLeave={(e) => (e.currentTarget.style.color = '#0f172a')}
+                                                    >
+                                                      <span>{child.domain}</span>
+                                                      <ExternalLink size={10} color="#94a3b8" />
+                                                    </a>
+                                                    {child.isEcommerce && (
+                                                      <span
+                                                        style={{
+                                                          fontSize: '10px',
+                                                          fontWeight: 700,
+                                                          color: '#065f46',
+                                                          background: '#d1fae5',
+                                                          padding: '1px 5px',
+                                                          borderRadius: '4px',
+                                                          border: '1px solid #a7f3d0',
+                                                        }}
+                                                      >
+                                                        🛒 E-Com
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: '#64748b', marginTop: '3px' }}>
+                                                    <span style={{ color: '#0369a1', fontWeight: 600 }}>
+                                                      {child.categoryIcon || '🌐'} {child.category || 'Corporate & Business'}
+                                                    </span>
+                                                    <span>•</span>
+                                                    <span style={{ color: '#475569' }}>
+                                                      📄 {childPages.length > 0 ? childPages.length : (child.pagesCrawled || 1)} pages
+                                                    </span>
+                                                  </div>
+                                                </div>
+
+                                                {/* 2. Discovered Subdomains Dropdown Trigger & Preview */}
+                                                <div style={{ minWidth: '220px' }}>
+                                                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>
+                                                    <motion.button
+                                                      whileHover={{ scale: 1.04 }}
+                                                      whileTap={{ scale: 0.96 }}
+                                                      type="button"
+                                                      onClick={() => setActiveChildSubdomainDomain(child)}
+                                                      style={{
+                                                        display: 'inline-flex',
+                                                        alignItems: 'center',
+                                                        gap: '4px',
+                                                        fontSize: '11px',
+                                                        fontWeight: 700,
+                                                        padding: '2px 8px',
+                                                        borderRadius: '5px',
+                                                        background: '#e0f2fe',
+                                                        color: '#0369a1',
+                                                        border: '1px solid #bae6fd',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.15s ease',
+                                                      }}
+                                                      title={`Open all ${childSubs.length} subdomains explorer for ${child.domain}`}
+                                                    >
+                                                      <Network size={11} color="#0369a1" />
+                                                      <span>{childSubs.length} Subdomains</span>
+                                                      <ChevronDown size={10} />
+                                                    </motion.button>
+                                                    {childSubs.slice(0, 2).map((s) => {
+                                                      const targetUrl = s.startsWith('http') ? s : `https://${s}`;
+                                                      return (
+                                                        <a
+                                                          key={s}
+                                                          href={targetUrl}
+                                                          target="_blank"
+                                                          rel="noopener noreferrer"
+                                                          style={{
+                                                            fontSize: '10.5px',
+                                                            padding: '1px 6px',
+                                                            borderRadius: '4px',
+                                                            background: '#f1f5f9',
+                                                            color: '#0369a1',
+                                                            border: '1px solid #e2e8f0',
+                                                            textDecoration: 'none',
+                                                            display: 'inline-flex',
+                                                            alignItems: 'center',
+                                                            gap: '3px',
+                                                          }}
+                                                        >
+                                                          <span>{s}</span>
+                                                          <ExternalLink size={9} />
+                                                        </a>
+                                                      );
+                                                    })}
+                                                    {childSubs.length > 2 && (
+                                                      <span
+                                                        onClick={() => setActiveChildSubdomainDomain(child)}
+                                                        style={{ fontSize: '10.5px', color: '#0284c7', cursor: 'pointer', fontWeight: 600 }}
+                                                      >
+                                                        +{childSubs.length - 2} more
+                                                      </span>
+                                                    )}
+                                                  </div>
+                                                </div>
+
+                                                {/* 3. Verified Contact (Email & Phone) with Direct /contact link */}
+                                                <div style={{ minWidth: '210px' }}>
+                                                  {childEmails.length === 0 && childPhones.length === 0 ? (
+                                                    <span style={{ fontSize: '11.5px', color: '#94a3b8', fontStyle: 'italic' }}>
+                                                      None detected
+                                                    </span>
+                                                  ) : (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                                                      {childEmails[0] && (
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                          <span style={{ fontSize: '11px', fontWeight: 600, color: '#047857', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                            <Mail size={11} color="#059669" />
+                                                            <span>{childEmails[0]}</span>
+                                                          </span>
+                                                          <span style={{ fontSize: '9.5px', fontWeight: 700, color: '#047857', background: '#d1fae5', padding: '1px 4px', borderRadius: '3px' }}>
+                                                            Primary
+                                                          </span>
+                                                          {(() => {
+                                                            const emDetail = child.verifiedEmails?.find((e: any) => e.email === childEmails[0]);
+                                                            const sourceUrl = emDetail?.sourceUrl || (childPages.find((p: any) => /contact/i.test(p.url))?.url) || `https://${child.domain}/contact`;
+                                                            const cleanPath = sourceUrl.replace(/^https?:\/\/[^\/]+/, '') || '/contact';
+                                                            return (
+                                                              <a
+                                                                href={sourceUrl}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                style={{
+                                                                  fontSize: '10px',
+                                                                  color: '#0284c7',
+                                                                  background: '#e0f2fe',
+                                                                  padding: '1px 5px',
+                                                                  borderRadius: '3px',
+                                                                  border: '1px solid #bae6fd',
+                                                                  textDecoration: 'none',
+                                                                  display: 'inline-flex',
+                                                                  alignItems: 'center',
+                                                                  gap: '2px',
+                                                                }}
+                                                                title={`Discovered on ${sourceUrl}`}
+                                                              >
+                                                                <span>📍 {cleanPath}</span>
+                                                                <ExternalLink size={8} />
+                                                              </a>
+                                                            );
+                                                          })()}
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => handleCopy(childEmails[0], `child_em_${child.id}`)}
+                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                                            title="Copy email"
+                                                          >
+                                                            {copiedId === `child_em_${child.id}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
+                                                          </button>
+                                                        </div>
+                                                      )}
+                                                      {childPhones[0] && (
+                                                        <div style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+                                                          <span style={{ fontSize: '11px', fontWeight: 600, color: '#047857', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                                                            <Phone size={11} color="#059669" />
+                                                            <span>{childPhones[0]}</span>
+                                                          </span>
+                                                          {(() => {
+                                                            const sourceUrl = getEffectivePhoneSource(child);
+                                                            const cleanPath = sourceUrl.replace(/^https?:\/\/[^\/]+/, '') || '/contact';
+                                                            return (
+                                                              <a
+                                                                href={sourceUrl}
+                                                                target="_blank"
+                                                                rel="noopener noreferrer"
+                                                                style={{
+                                                                  fontSize: '10px',
+                                                                  color: '#059669',
+                                                                  background: '#ecfdf5',
+                                                                  padding: '1px 5px',
+                                                                  borderRadius: '3px',
+                                                                  border: '1px solid #a7f3d0',
+                                                                  textDecoration: 'none',
+                                                                  display: 'inline-flex',
+                                                                  alignItems: 'center',
+                                                                  gap: '2px',
+                                                                }}
+                                                                title={`Discovered on ${sourceUrl}`}
+                                                              >
+                                                                <span>📍 {cleanPath}</span>
+                                                                <ExternalLink size={8} />
+                                                              </a>
+                                                            );
+                                                          })()}
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => handleCopy(childPhones[0], `child_ph_${child.id}`)}
+                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                                            title="Copy phone"
+                                                          >
+                                                            {copiedId === `child_ph_${child.id}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
+                                                          </button>
+                                                        </div>
+                                                      )}
+                                                    </div>
+                                                  )}
+                                                </div>
+
+                                                {/* 4. Country */}
+                                                <div style={{ fontSize: '12px', fontWeight: 600, color: '#475569', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                                                  <span>{child.countryFlag || '🌐'}</span>
+                                                  <span>{child.countryCode || 'INT'}</span>
+                                                </div>
+
+                                                {/* 5. Status */}
+                                                <div>
+                                                  <Badge variant={child.status === 'CRAWLING' ? 'primary' : 'success'}>
+                                                    {child.status || 'RESOLVED'}
+                                                  </Badge>
+                                                </div>
+
+                                                {/* 6. Action: Inspect Pages */}
+                                                <div>
+                                                  <motion.button
+                                                    whileHover={{ scale: 1.05 }}
+                                                    whileTap={{ scale: 0.95 }}
+                                                    type="button"
+                                                    onClick={() => setExpandedChildPagesId(isPagesOpen ? null : child.id)}
+                                                    style={{
+                                                      display: 'inline-flex',
+                                                      alignItems: 'center',
+                                                      gap: '4px',
+                                                      padding: '4px 10px',
+                                                      borderRadius: '5px',
+                                                      border: '1px solid #e2e8f0',
+                                                      background: isPagesOpen ? '#e0f2fe' : '#f8fafc',
+                                                      color: isPagesOpen ? '#0369a1' : '#475569',
+                                                      fontSize: '11px',
+                                                      fontWeight: 600,
+                                                      cursor: 'pointer',
+                                                    }}
+                                                  >
+                                                    <FileText size={11} />
+                                                    <span>{isPagesOpen ? 'Hide Pages' : `Pages (${childPages.length || child.pagesCrawled || 1})`}</span>
+                                                    <ChevronDown size={10} style={{ transform: isPagesOpen ? 'rotate(180deg)' : 'none', transition: 'transform 0.2s ease' }} />
+                                                  </motion.button>
+                                                </div>
+                                              </div>
+
+                                              {/* Expandable Crawled Pages Accordion for this child domain */}
+                                              {isPagesOpen && (
+                                                <div
+                                                  style={{
+                                                    marginTop: '8px',
+                                                    padding: '10px 12px',
+                                                    background: '#f8fafc',
+                                                    borderRadius: '6px',
+                                                    border: '1px solid #e2e8f0',
+                                                  }}
+                                                >
+                                                  <div style={{ fontSize: '11px', fontWeight: 700, color: '#475569', marginBottom: '6px' }}>
+                                                    Crawled Pages for {child.domain} ({childPages.length})
+                                                  </div>
+                                                  {childPages.length === 0 ? (
+                                                    <div style={{ fontSize: '11px', color: '#94a3b8', fontStyle: 'italic' }}>
+                                                      Direct apex page verified (https://{child.domain})
+                                                    </div>
+                                                  ) : (
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                      {childPages.map((pg, pIdx) => (
+                                                        <div
+                                                          key={pIdx}
+                                                          style={{
+                                                            display: 'flex',
+                                                            alignItems: 'center',
+                                                            justifyContent: 'space-between',
+                                                            padding: '4px 8px',
+                                                            background: '#ffffff',
+                                                            borderRadius: '4px',
+                                                            border: '1px solid #e2e8f0',
+                                                            fontSize: '11px',
+                                                          }}
+                                                        >
+                                                          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                                            <span
+                                                              style={{
+                                                                fontSize: '9.5px',
+                                                                fontWeight: 700,
+                                                                padding: '1px 5px',
+                                                                borderRadius: '3px',
+                                                                background: pg.statusCode && pg.statusCode >= 200 && pg.statusCode < 400 ? '#ecfdf5' : '#fee2e2',
+                                                                color: pg.statusCode && pg.statusCode >= 200 && pg.statusCode < 400 ? '#047857' : '#b91c1c',
+                                                              }}
+                                                            >
+                                                              {pg.statusCode || 200}
+                                                            </span>
+                                                            <span style={{ color: '#64748b', fontSize: '10.5px' }}>depth {pg.depth ?? 0}</span>
+                                                            <a
+                                                              href={pg.url}
+                                                              target="_blank"
+                                                              rel="noopener noreferrer"
+                                                              style={{ color: '#0369a1', textDecoration: 'none', fontWeight: 600 }}
+                                                            >
+                                                              {pg.url}
+                                                            </a>
+                                                            {pg.title && <span style={{ color: '#94a3b8' }}>— {pg.title}</span>}
+                                                          </div>
+                                                          <button
+                                                            type="button"
+                                                            onClick={() => handleCopy(pg.url, `cp_pg_${child.id}_${pIdx}`)}
+                                                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+                                                          >
+                                                            {copiedId === `cp_pg_${child.id}_${pIdx}` ? <Check size={11} color="#059669" /> : <Copy size={11} color="#94a3b8" />}
+                                                          </button>
+                                                        </div>
+                                                      ))}
+                                                    </div>
+                                                  )}
+                                                </div>
+                                              )}
+                                            </div>
+                                          );
+                                        })}
+                                    </div>
+                                  </div>
+                                )}
+
                                 {/* Website Intelligence & Content Classification OR Offline Alert */}
-                                {(currentTab === 'intel' || currentTab === 'all' || (isOffline && currentTab === 'pages')) && (
+                                {(currentTab === 'intel' || (currentTab === 'all' && !isTldRecord) || (isOffline && currentTab === 'pages')) && (
                                   isOffline ? (
                               <div
                                 style={{
@@ -2280,6 +3374,90 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
               </motion.tbody>
             </AnimatePresence>
           </table>
+        </div>
+      )}
+
+      {/* Subdomain List Explorer Modal for Discovered Child Domain */}
+      {activeChildSubdomainDomain && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(15, 23, 42, 0.55)',
+            backdropFilter: 'blur(3px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px',
+          }}
+          onClick={() => setActiveChildSubdomainDomain(null)}
+        >
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 10 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 10 }}
+            transition={{ duration: 0.18, ease: 'easeOut' }}
+            style={{
+              background: '#ffffff',
+              borderRadius: '12px',
+              maxWidth: '920px',
+              width: '100%',
+              maxHeight: '88vh',
+              overflow: 'hidden',
+              boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.25)',
+              display: 'flex',
+              flexDirection: 'column',
+              border: '1px solid #cbd5e1',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                padding: '14px 20px',
+                borderBottom: '1px solid #e2e8f0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                background: '#f8fafc',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <Network size={16} color="#0284c7" />
+                <div>
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
+                    Discovered Subdomains for {activeChildSubdomainDomain.domain}
+                  </h3>
+                  <span style={{ fontSize: '11px', color: '#64748b' }}>
+                    {activeChildSubdomainDomain.subdomains?.length || 0} verified subdomains found under this domain
+                  </span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveChildSubdomainDomain(null)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: '#64748b',
+                  borderRadius: '4px',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.background = '#e2e8f0')}
+                onMouseLeave={(e) => (e.currentTarget.style.background = 'none')}
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div style={{ padding: '16px', overflowY: 'auto', flex: 1 }}>
+              <SubdomainListExplorer
+                subdomains={activeChildSubdomainDomain.subdomains || []}
+                domainName={activeChildSubdomainDomain.domain}
+                subdomainDetails={activeChildSubdomainDomain.subdomainDetails}
+              />
+            </div>
+          </motion.div>
         </div>
       )}
     </Card>

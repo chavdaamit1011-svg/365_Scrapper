@@ -35,6 +35,7 @@ export interface CrawlOptions {
   delayMs?: number;
   timeoutMs?: number;
   respectRobotsTxt?: boolean;
+  tldZone?: string;
   onProgress?: (pagesCrawled: number, subdomainsCount: number, emailsCount: number) => void;
 }
 
@@ -102,6 +103,8 @@ export interface ScrapedDomainRecord {
   discoveredAt: string;
   createdAt?: string;
   updatedAt?: string;
+  tldZone?: string;
+  isTldZone?: boolean;
 }
 
 export interface FetchResult {

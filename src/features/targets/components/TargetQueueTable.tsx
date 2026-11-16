@@ -64,6 +64,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
 
   const rootDomainCount = pendingTargets.filter((t) => t.type === 'root_domain').length;
   const subdomainCount = pendingTargets.filter((t) => t.type === 'subdomain').length;
+  const tldZoneCount = pendingTargets.filter((t) => t.type === 'tld_zone').length;
 
   return (
     <Card style={{ padding: '24px' }}>
@@ -88,7 +89,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
             <Badge variant="primary">{pendingTargets.length} Ready</Badge>
           </div>
           <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', margin: 0 }}>
-            {rootDomainCount} Root Domains &bull; {subdomainCount} Subdomains loaded in queue.
+            {rootDomainCount} Root Domains &bull; {subdomainCount} Subdomains{tldZoneCount > 0 ? ` &bull; ${tldZoneCount} TLD 24/7 Zones` : ''} loaded in queue.
           </p>
         </div>
 
@@ -166,9 +167,10 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
         >
           {(
             [
-              { id: 'all', label: `All (${targets.length})` },
+              { id: 'all', label: `All (${pendingTargets.length})` },
               { id: 'root_domain', label: `Root (${rootDomainCount})` },
               { id: 'subdomain', label: `Subdomains (${subdomainCount})` },
+              ...(tldZoneCount > 0 ? [{ id: 'tld_zone' as const, label: `TLD Zones (${tldZoneCount})` }] : []),
             ] as const
           ).map((btn) => (
             <motion.button
@@ -409,9 +411,37 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                     </td>
 
                     <td style={{ padding: '12px 16px' }}>
-                      <Badge variant={t.type === 'subdomain' ? 'warning' : 'primary'}>
-                        {t.type === 'subdomain' ? 'SUBDOMAIN' : 'ROOT DOMAIN'}
-                      </Badge>
+                      {t.type === 'tld_zone' ? (
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: '5px',
+                            padding: '3px 10px',
+                            borderRadius: '9999px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            background: '#ecfdf5',
+                            color: '#047857',
+                            border: '1px solid #a7f3d0',
+                          }}
+                        >
+                          <span
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              background: '#10b981',
+                              animation: 'pulse 1.2s infinite ease-in-out',
+                            }}
+                          />
+                          TLD ZONE (24/7 STREAM)
+                        </span>
+                      ) : (
+                        <Badge variant={t.type === 'subdomain' ? 'warning' : 'primary'}>
+                          {t.type === 'subdomain' ? 'SUBDOMAIN' : 'ROOT DOMAIN'}
+                        </Badge>
+                      )}
                     </td>
 
                     <td style={{ padding: '12px 16px' }}>

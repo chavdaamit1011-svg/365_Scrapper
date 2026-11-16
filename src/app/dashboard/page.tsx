@@ -536,7 +536,11 @@ export default function DashboardPage() {
                 >
                   <ScrapedResultsTable
                     records={crawler.scrapedResults}
+                    targets={targets}
                     isCrawling={crawler.status === 'RUNNING'}
+                    activeTargetDomain={crawler.stats.currentTargetName || undefined}
+                    activeWorkers={crawler.stats.activeWorkersList}
+                    activeCycle={crawler.cycleCount}
                     onClearResults={() => {
                       setTargets([]);
                       crawler.clearResults();
