@@ -6,7 +6,6 @@ import { redisQueue } from '@/lib/redisQueue';
 import { DorkingPersistenceService } from '@/modules/dorking/services/persistence';
 import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
 import { classifySite } from '@/lib/crawler/siteClassifier';
-import { cleanSubdomainCandidate } from '@/lib/crawler/subdomainRecon';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,14 +27,18 @@ export async function GET() {
 
     const results = docs.map((d: any) => {
       const rawSubs = Array.isArray(d.subdomains) ? d.subdomains : (d.subdomain ? [d.subdomain] : []);
-      const targetRoot = d.rootDomain || d.domain || '';
       const subs = Array.from(
         new Set(
           rawSubs
             .map((s: string) => {
               if (!s || typeof s !== 'string') return '';
-              const cleaned = cleanSubdomainCandidate(s, targetRoot) || cleanSubdomainCandidate(s);
-              return cleaned || '';
+              let c = s.trim().toLowerCase();
+              try {
+                c = decodeURIComponent(c);
+              } catch {}
+              c = c.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].split('?')[0];
+              c = c.replace(/^(?:2f|252f)+/i, '');
+              return c;
             })
             .filter((s: string) => s && s.length > 0 && !s.startsWith('.') && s !== d.domain)
         )

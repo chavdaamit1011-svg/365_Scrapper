@@ -131,16 +131,11 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         if (!s || typeof s !== 'string') continue;
         let cleanSub = s.trim().toLowerCase();
         try {
-          if (cleanSub.includes('%')) {
-            cleanSub = decodeURIComponent(cleanSub);
-          }
+          cleanSub = decodeURIComponent(cleanSub);
         } catch {}
-        cleanSub = cleanSub.replace(/^[a-z0-9_-]+:\/\//i, '').replace(/^\/\//, '');
-        cleanSub = cleanSub.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
-        cleanSub = cleanSub.replace(/^\*\./, '').replace(/^\./, '');
-        cleanSub = cleanSub.split('/')[0].split('?')[0].split('#')[0].split(':')[0];
-        cleanSub = cleanSub.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
-        if (cleanSub && cleanSub !== domainKey && !cleanSub.startsWith('.') && !cleanSub.includes('@')) {
+        cleanSub = cleanSub.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].split('?')[0];
+        cleanSub = cleanSub.replace(/^(?:2f|252f)+/i, '');
+        if (cleanSub && cleanSub !== domainKey && !cleanSub.startsWith('.')) {
           subList.push(cleanSub);
         }
       }

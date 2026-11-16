@@ -31,7 +31,11 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
   const [filterType, setFilterType] = useState<'all' | TargetType>('all');
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
-  const filtered = targets.filter((t) => {
+  // STRICT RULE: Target Queue table ONLY shows pending targets waiting in line to be crawled!
+  // Completed, cancelled (stopped), or active crawling domains are never shown in the pending queue.
+  const pendingTargets = targets.filter((t) => !t.status || t.status === 'pending');
+
+  const filtered = pendingTargets.filter((t) => {
     const matchesSearch = t.domain.toLowerCase().includes(search.toLowerCase());
     const matchesType = filterType === 'all' || t.type === filterType;
     return matchesSearch && matchesType;
@@ -44,9 +48,9 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
   };
 
   const handleExportCsv = () => {
-    if (targets.length === 0) return;
+    if (pendingTargets.length === 0) return;
     const header = 'Domain,Type,Source,FileName,AddedAt\n';
-    const rows = targets
+    const rows = pendingTargets
       .map((t) => `"${t.domain}","${t.type}","${t.source}","${t.fileName || ''}","${t.addedAt}"`)
       .join('\n');
     const blob = new Blob([header + rows], { type: 'text/csv' });
@@ -58,8 +62,8 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
     URL.revokeObjectURL(url);
   };
 
-  const rootDomainCount = targets.filter((t) => t.type === 'root_domain').length;
-  const subdomainCount = targets.filter((t) => t.type === 'subdomain').length;
+  const rootDomainCount = pendingTargets.filter((t) => t.type === 'root_domain').length;
+  const subdomainCount = pendingTargets.filter((t) => t.type === 'subdomain').length;
 
   return (
     <Card style={{ padding: '24px' }}>
@@ -81,7 +85,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
             <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-main)', margin: 0 }}>
               Ingested Target Scope
             </h2>
-            <Badge variant="primary">{targets.length} Ready</Badge>
+            <Badge variant="primary">{pendingTargets.length} Ready</Badge>
           </div>
           <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', margin: 0 }}>
             {rootDomainCount} Root Domains &bull; {subdomainCount} Subdomains loaded in queue.
@@ -89,7 +93,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-          {targets.length > 0 && (
+          {pendingTargets.length > 0 && (
             <>
               {onStartCrawler && !isCrawling && (
                 <Button
@@ -115,7 +119,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                 onClick={onClearAll}
                 leftIcon={<Trash2 size={13} />}
               >
-                Clear All
+                Clear Queue
               </Button>
             </>
           )}
@@ -285,7 +289,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                   <td colSpan={7} style={{ padding: '40px 18px', textAlign: 'center', color: 'var(--text-muted)' }}>
                     {activeTarget
                       ? `⚡ Currently crawling ${activeTarget.domain}. Queue is empty (0 upcoming domains waiting).`
-                      : targets.length === 0
+                      : pendingTargets.length === 0
                       ? 'No targets in queue. Enter domains manually or upload a CSV / Excel file above to start.'
                       : 'No queued targets match your search.'}
                   </td>
@@ -331,101 +335,7 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
 
                     {/* Queue Status */}
                     <td style={{ padding: '12px 16px' }}>
-                      {t.status === 'crawling' ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '5px',
-                            padding: '3px 9px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: '#e0f2fe',
-                            color: '#0369a1',
-                            border: '1px solid #bae6fd',
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: '6px',
-                              height: '6px',
-                              borderRadius: '50%',
-                              background: '#0284c7',
-                              animation: 'pulse 1.2s infinite ease-in-out',
-                            }}
-                          />
-                          ⚡ CRAWLING (Cycle #{cycleCount || 1})
-                        </span>
-                      ) : t.status === 'completed' ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '3px 9px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: '#dcfce7',
-                            color: '#15803d',
-                            border: '1px solid #bbf7d0',
-                          }}
-                        >
-                          ✓ CYCLE COMPLETED
-                        </span>
-                      ) : t.status === 'paused' ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '3px 9px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: '#fef3c7',
-                            color: '#92400e',
-                            border: '1px solid #fde68a',
-                          }}
-                        >
-                          ⏸ PAUSED
-                        </span>
-                      ) : t.status === 'cancelled' ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '3px 9px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: '#ffe4e6',
-                            color: '#be123c',
-                            border: '1px solid #fecdd3',
-                          }}
-                        >
-                          ⊘ STOPPED
-                        </span>
-                      ) : t.status === 'failed' ? (
-                        <span
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            padding: '3px 9px',
-                            borderRadius: '9999px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            background: '#fee2e2',
-                            color: '#b91c1c',
-                            border: '1px solid #fecaca',
-                          }}
-                        >
-                          ⚠️ FAILED
-                        </span>
-                      ) : isCrawling ? (
+                      {isCrawling ? (
                         idx === 0 ? (
                           <span
                             style={{
@@ -466,15 +376,24 @@ export const TargetQueueTable: React.FC<TargetQueueTableProps> = ({
                           style={{
                             display: 'inline-flex',
                             alignItems: 'center',
+                            gap: '5px',
                             padding: '3px 9px',
                             borderRadius: '9999px',
                             fontSize: '11px',
                             fontWeight: 600,
-                            background: '#f1f5f9',
-                            color: '#64748b',
-                            border: '1px solid #e2e8f0',
+                            background: '#ecfdf5',
+                            color: '#15803d',
+                            border: '1px solid #bbf7d0',
                           }}
                         >
+                          <span
+                            style={{
+                              width: '6px',
+                              height: '6px',
+                              borderRadius: '50%',
+                              background: '#16a34a',
+                            }}
+                          />
                           READY IN QUEUE
                         </span>
                       )}

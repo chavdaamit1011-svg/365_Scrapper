@@ -2,7 +2,7 @@
 
 export const dynamic = 'force-dynamic';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -50,6 +50,15 @@ export default function DashboardPage() {
 
   const handleTargetStatusChange = useCallback((targetId: string, newStatus: NonNullable<TargetItem['status']>) => {
     setTargets((prev) => {
+      // If a target was cancelled/stopped or completed, immediately remove it from the pending target queue
+      if (newStatus === 'cancelled' || newStatus === 'completed') {
+        const updated = prev.filter((t) => t.id !== targetId);
+        try {
+          localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
+        } catch (e) {}
+        return updated;
+      }
+
       const updated = prev.map((t) => (t.id === targetId ? { ...t, status: newStatus } : t));
       try {
         localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
@@ -60,6 +69,11 @@ export default function DashboardPage() {
 
   // Crawler Controller Hook
   const crawler = useCrawlerController(targets, handleTargetStatusChange);
+
+  // Strictly pending targets waiting in line to be crawled
+  const pendingTargets = useMemo(() => {
+    return targets.filter((t) => !t.status || t.status === 'pending');
+  }, [targets]);
 
   // Determine whether crawler workers are actively running or paused
   const isAnyWorkerActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
@@ -74,7 +88,7 @@ export default function DashboardPage() {
     setCurrentUser(session);
     fetchUsers();
 
-    // Hydrate targets from localStorage if available (with deduplication guard)
+    // Hydrate targets from localStorage if available (with deduplication guard & pending-only filter)
     try {
       const stored = localStorage.getItem('the_scrapper_targets_queue');
       if (stored) {
@@ -84,13 +98,24 @@ export default function DashboardPage() {
           const seenDomains = new Set<string>();
           const deduplicated: TargetItem[] = [];
           for (const item of parsed) {
-            if (item && item.id && item.domain && !seenIds.has(item.id) && !seenDomains.has(item.domain)) {
+            // ONLY restore targets that are genuinely pending! (Drop any old 'cancelled' or 'completed' items)
+            if (
+              item &&
+              item.id &&
+              item.domain &&
+              (!item.status || item.status === 'pending') &&
+              !seenIds.has(item.id) &&
+              !seenDomains.has(item.domain.toLowerCase())
+            ) {
               seenIds.add(item.id);
-              seenDomains.add(item.domain);
+              seenDomains.add(item.domain.toLowerCase());
               deduplicated.push(item);
             }
           }
           setTargets(deduplicated);
+          try {
+            localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(deduplicated));
+          } catch (e) {}
         }
       }
     } catch (e) {
@@ -157,17 +182,16 @@ export default function DashboardPage() {
     if (!newItems || newItems.length === 0) return;
 
     setTargets((prev) => {
-      const existingIds = new Set(prev.map((p) => p.id));
-      const existingDomains = new Set(prev.map((p) => p.domain.toLowerCase()));
+      // Retain only currently active or pending targets in queue
+      const cleanPrev = prev.filter((p) => !p.status || p.status === 'pending' || p.status === 'crawling');
+      const activeDomains = new Set(cleanPrev.map((p) => p.domain.toLowerCase()));
       const uniqueNew = newItems.filter(
-        (item) =>
-          !existingIds.has(item.id) &&
-          !existingDomains.has(item.domain.toLowerCase())
+        (item) => !activeDomains.has(item.domain.toLowerCase())
       );
       if (uniqueNew.length === 0) return prev;
 
       // FIFO Queue: Append new targets to the END of the queue
-      const updated = [...prev, ...uniqueNew];
+      const updated = [...cleanPrev, ...uniqueNew];
       try {
         localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
       } catch (e) {}
@@ -240,7 +264,7 @@ export default function DashboardPage() {
         currentUser={currentUser}
         isCollapsed={isSidebarCollapsed}
         setIsCollapsed={setIsSidebarCollapsed}
-        targetsCount={targets.length}
+        targetsCount={pendingTargets.length}
       />
 
       {/* Main Content Area (Independent Smooth Scrolling) */}
@@ -457,7 +481,7 @@ export default function DashboardPage() {
                     />
                   )}
                   <Layers size={15} color={dataViewMode === 'queue' ? '#0284c7' : '#64748b'} />
-                  <span>Target Scope Queue ({targets.length})</span>
+                  <span>Target Scope Queue ({pendingTargets.length})</span>
                 </button>
               </div>
 
@@ -488,10 +512,10 @@ export default function DashboardPage() {
                     variant="primary"
                     size="sm"
                     onClick={() => crawler.startCrawler()}
-                    disabled={targets.length === 0}
+                    disabled={pendingTargets.length === 0}
                     leftIcon={<Play size={14} fill="currentColor" />}
                   >
-                    Start Crawler ({targets.length} Scope)
+                    Start Crawler ({pendingTargets.length} Scope)
                   </Button>
                 )}
               </div>
@@ -509,7 +533,7 @@ export default function DashboardPage() {
             {/* View Mode 2: Ingested Target Queue Table (Strictly Upcoming Sequential Queue) */}
             {dataViewMode === 'queue' && (
               <TargetQueueTable
-                targets={targets}
+                targets={pendingTargets}
                 activeTarget={targets.find((t) => t.status === 'crawling') || null}
                 onRemoveTarget={handleRemoveTarget}
                 onClearAll={handleClearTargets}

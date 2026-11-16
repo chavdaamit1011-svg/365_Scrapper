@@ -55,32 +55,17 @@ export function extractRootDomain(hostnameOrUrl: string): string {
  * Cleans a candidate subdomain string by removing protocol, port, path,
  * decoding URI encoding (e.g. %2f -> /), and stripping leading URL encoding leftovers (like 2f or 252f).
  */
-export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string | null {
+export function cleanSubdomainCandidate(raw: string, cleanRoot: string): string | null {
   if (!raw || typeof raw !== 'string') return null;
   let s = raw.trim().toLowerCase();
 
-  // Try URL decoding if percent encoding is present (e.g. %2f -> /)
-  try {
-    if (s.includes('%')) {
-      s = decodeURIComponent(s);
-    }
-  } catch {}
-
-  // Strip protocol and leading slashes
-  s = s.replace(/^[a-z0-9_-]+:\/\//i, '').replace(/^\/\//, '');
-
-  // Strip URL-encoding leftovers if regex matched inside a query param (e.g. 2fcensusindia.gov.in, 252fcensusindia.gov.in)
+  // Strip URL encoding leftovers like 2f, 252f, 3a, 253a, 25
   s = s.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
+  s = s.replace(/^[a-z0-9_-]+:\/\//i, '').replace(/^\/\//, '');
   s = s.replace(/^\*\./, '').replace(/^\./, '');
   s = s.split('/')[0].split('?')[0].split('#')[0].split(':')[0];
-  s = s.replace(/^(?:2f|252f|3a|253a|25)+/i, '');
 
-  if (!s) return null;
-
-  if (cleanRoot) {
-    const root = cleanRoot.trim().toLowerCase();
-    if (s === root || !s.endsWith(`.${root}`)) return null;
-  }
+  if (!s || s === cleanRoot || !s.endsWith(`.${cleanRoot}`)) return null;
 
   // Filter out emails, wildcards, slashes, percent, etc.
   if (
@@ -101,7 +86,6 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string
   if (!dnsRegex.test(s)) return null;
 
   const parts = s.split('.');
-  if (parts.length < 2) return null;
   for (const p of parts) {
     if (!p || p.length > 63 || p.startsWith('-') || p.endsWith('-')) return null;
   }
@@ -110,7 +94,7 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string
 }
 
 export function sanitizeCandidate(cand: string): string {
-  return cleanSubdomainCandidate(cand) || cand.trim().toLowerCase().replace(/^(?:2f|252f)+/i, '');
+  return cleanSubdomainCandidate(cand, '') || cand.trim().toLowerCase();
 }
 
 /**
@@ -183,12 +167,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
                   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                 Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
               },
-              signal: AbortSignal.timeout(10000),
+              signal: AbortSignal.timeout(8000),
             });
             if (res.ok) {
               const html = await res.text();
-              const extracted = extractSubdomainsFromText(html, cleanRoot);
-              for (const s of extracted) addSub(s);
+              const matches = html.match(subdomainRegex) || [];
+              for (const m of matches) addSub(m);
             }
           } catch {}
         })
@@ -211,12 +195,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
               'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(8000),
           });
           if (res.ok) {
             const html = await res.text();
-            const extracted = extractSubdomainsFromText(html, cleanRoot);
-            for (const s of extracted) addSub(s);
+            const matches = html.match(subdomainRegex) || [];
+            for (const m of matches) addSub(m);
           }
         } catch {}
       })
@@ -237,12 +221,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
               'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             },
-            signal: AbortSignal.timeout(10000),
+            signal: AbortSignal.timeout(8000),
           });
           if (res.ok) {
             const html = await res.text();
-            const extracted = extractSubdomainsFromText(html, cleanRoot);
-            for (const s of extracted) addSub(s);
+            const matches = html.match(subdomainRegex) || [];
+            for (const m of matches) addSub(m);
           }
         } catch {}
       })
@@ -325,12 +309,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     try {
       const res = await fetch(`https://rapiddns.io/subdomain/${cleanRoot}?full=1`, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(9000),
       });
       if (res.ok) {
         const html = await res.text();
-        const extracted = extractSubdomainsFromText(html, cleanRoot);
-        for (const s of extracted) addSub(s);
+        const matches = html.match(subdomainRegex) || [];
+        for (const m of matches) addSub(m);
       }
     } catch {}
   };
@@ -340,7 +324,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     try {
       const res = await fetch(`https://api.hackertarget.com/hostsearch/?q=${cleanRoot}`, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (res.ok) {
@@ -365,7 +349,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(cleanRoot)}&include_subdomains=true&expand=dns_names`,
         {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(8000),
         }
       );
       if (res.ok) {
@@ -390,7 +374,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         `https://otx.alienvault.com/api/v1/indicators/domain/${encodeURIComponent(cleanRoot)}/passive_dns`,
         {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(15000),
+          signal: AbortSignal.timeout(8000),
         }
       );
       if (res.ok) {
@@ -409,7 +393,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     try {
       const res = await fetch(`https://jldc.me/anubis/subdomains/${encodeURIComponent(cleanRoot)}`, {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(7000),
       });
       if (res.ok) {
         const data = await res.json();
@@ -427,7 +411,7 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     try {
       const res = await fetch(`https://api.threatminer.org/v2/domain.php?q=${encodeURIComponent(cleanRoot)}&rt=5`, {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(12000),
+        signal: AbortSignal.timeout(6000),
       });
       if (res.ok) {
         const data = await res.json();
@@ -440,54 +424,47 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     } catch {}
   };
 
-  // 10. Vector: Certificate Transparency (crt.sh) - Primary High-Yield SAN Reconnaissance (2,400+ Subdomains for gov.in)
+  // 10. Vector: Certificate Transparency (crt.sh) with %25 wildcard encoding
   const fetchCrtSh = async () => {
-    try {
-      // NOTE: Direct cleanRoot query without %25 wildcard uses crt.sh's indexed database efficiently.
-      // Large domains like gov.in return multi-megabyte JSON payloads with 2,400+ subdomains.
-      // 30,000ms timeout provides the necessary runway without being aborted prematurely.
-      const res = await fetch(`https://crt.sh/?q=${encodeURIComponent(cleanRoot)}&output=json`, {
-        headers: {
-          'User-Agent':
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          Accept: 'application/json, text/plain, */*',
-        },
-        signal: AbortSignal.timeout(30000),
-      });
+    const urls = [
+      `https://crt.sh/?q=%25.${encodeURIComponent(cleanRoot)}&output=json`,
+      `https://crt.sh/?q=${encodeURIComponent(cleanRoot)}&output=json`,
+    ];
 
-      if (res.ok) {
-        const text = await res.text();
-        if (text && text.trim().startsWith('[')) {
-          const data = JSON.parse(text);
-          if (Array.isArray(data)) {
-            for (const item of data) {
-              const rawNames = (item.name_value || '') + '\n' + (item.common_name || '');
-              for (let sub of rawNames.split('\n')) {
-                sub = sub.trim().toLowerCase();
-                if (sub.startsWith('*.')) sub = sub.slice(2);
-                if (sub.startsWith('*')) sub = sub.slice(1);
-                addSub(sub);
+    await Promise.allSettled(
+      urls.map(async (url) => {
+        try {
+          const res = await fetch(url, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            signal: AbortSignal.timeout(7000),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data)) {
+              for (const item of data) {
+                const rawNames = item.name_value || '';
+                for (let sub of rawNames.split('\n')) {
+                  sub = sub.trim().toLowerCase();
+                  if (sub.startsWith('*.')) sub = sub.slice(2);
+                  if (sub.startsWith('*')) sub = sub.slice(1);
+                  addSub(sub);
+                }
               }
             }
           }
-        }
-      }
-    } catch (e) {
-      // crt.sh error handled gracefully
-    }
+        } catch {}
+      })
+    );
   };
 
-  // 11. Vector: Archive.org Wayback Machine CDX (Deep Historical Subdomains)
+  // 11. Vector: Archive.org Wayback Machine CDX
   const fetchArchiveOrg = async () => {
     try {
       const res = await fetch(
-        `https://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=5000`,
+        `http://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=1000`,
         {
-          headers: {
-            'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-          },
-          signal: AbortSignal.timeout(20000),
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(7000),
         }
       );
 
@@ -496,10 +473,8 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
         if (Array.isArray(rows)) {
           for (const row of rows.slice(1)) {
             try {
-              if (row[0]) {
-                const parsed = new URL(row[0]);
-                addSub(parsed.hostname);
-              }
+              const parsed = new URL(row[0]);
+              addSub(parsed.hostname);
             } catch {}
           }
         }
@@ -518,19 +493,19 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
               'User-Agent':
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             },
-            signal: AbortSignal.timeout(8000),
+            signal: AbortSignal.timeout(6000),
           });
           if (res.ok) {
             const html = await res.text();
-            const extracted = extractSubdomainsFromText(html, cleanRoot);
-            for (const s of extracted) addSub(s);
+            const matches = html.match(subdomainRegex) || [];
+            for (const m of matches) addSub(m);
           }
         } catch {}
       })
     );
   };
 
-  // 13. Vector: Ultra-Fast Active Anycast DNS Dictionary Probing (600+ Prefixes)
+  // 13. Vector: Active Concurrent Anycast DNS Dictionary Probing (600+ Prefixes)
   const probeDnsDictionary = async () => {
     const candidatePrefixes = [
       // Standard Infrastructure, Web, and Auth
@@ -578,8 +553,8 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       'anyror', 'garvi', 'jantri', 'ikhedut', 'kuarbaishala', 'landrecords', 'tribal', 'diragri'
     ];
 
-    // Concurrently resolve in batches of 60 with 1000ms max timeout per batch (total probing time < 10s)
-    const batchSize = 60;
+    // Concurrently resolve in batches of 40 with Anycast DNS and non-blocking timeout
+    const batchSize = 40;
     for (let i = 0; i < candidatePrefixes.length; i += batchSize) {
       const batch = candidatePrefixes.slice(i, i + batchSize);
       await Promise.allSettled(
@@ -587,12 +562,19 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
           const candidate = `${prefix}.${cleanRoot}`;
           try {
             await Promise.race([
-              dns.promises.resolve4(candidate),
-              dns.promises.resolveCname(candidate),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000)),
+              dnsResolver.resolve4(candidate),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2800)),
             ]);
             addSub(candidate);
-          } catch {}
+          } catch {
+            try {
+              await Promise.race([
+                dnsResolver.resolveCname(candidate),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
+              ]);
+              addSub(candidate);
+            } catch {}
+          }
         })
       );
     }

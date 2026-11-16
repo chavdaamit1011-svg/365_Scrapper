@@ -10,7 +10,7 @@ import {
   CrawledPageDetail,
   VerifiedEmailDetail,
 } from './types';
-import { extractRootDomain, discoverAllSubdomains, isValidSubdomain, extractSubdomainsFromText, cleanSubdomainCandidate } from './subdomainRecon';
+import { extractRootDomain, discoverAllSubdomains, isValidSubdomain, extractSubdomainsFromText } from './subdomainRecon';
 import { fetchUniversal } from './universalFetcher';
 import { extractLinksAndSubdomains, getUrlPriority } from './linkExtractor';
 import { extractAndVerifyEmails } from './emailExtractor';
@@ -94,13 +94,6 @@ export async function crawlDomain(
   const visitedUrls = new Set<string>();
   const queuedUrls = new Set<string>();
 
-  const addSubdomainToScope = (cand: string) => {
-    const cleaned = cleanSubdomainCandidate(cand, rootDomain);
-    if (cleaned) {
-      allSubdomains.add(cleaned);
-    }
-  };
-
   // Step 1: Combined Multi-Source Subdomain Reconnaissance & Real Search Dorking
   console.log(`[CrawlerEngine] Launching concurrent subdomain enumeration & search dorking for root: ${rootDomain}`);
   try {
@@ -109,7 +102,7 @@ export async function crawlDomain(
 
   const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain);
   for (const s of discoveredSubdomainsList) {
-    addSubdomainToScope(s);
+    allSubdomains.add(s);
   }
   console.log(`[CrawlerEngine] Total OSINT subdomains discovered: ${allSubdomains.size}`);
 
@@ -207,7 +200,7 @@ export async function crawlDomain(
         const subEmails = await extractAndVerifyEmails(subFetchSuccess.html, subFetchSuccess.finalUrl);
         for (const em of subEmails) allEmails.set(em.email, em);
         for (const ph of extractPhoneNumbers(subFetchSuccess.html)) allPhones.add(ph);
-        for (const sub of extractSubdomainsFromText(subFetchSuccess.html, rootDomain)) addSubdomainToScope(sub);
+        for (const sub of extractSubdomainsFromText(subFetchSuccess.html, rootDomain)) allSubdomains.add(sub);
       } else {
         // Apex and subdomains are network/DNS only
         console.log(`[CrawlerEngine] Apex and subdomains are network services only. Classifying domain scope.`);
@@ -310,10 +303,10 @@ export async function crawlDomain(
     // Extract initial links and subdomains
     const rootLinks = extractLinksAndSubdomains(rootFetchResult.html, rootFetchResult.finalUrl, startingHost);
     for (const sub of rootLinks.discoveredSubdomains) {
-      addSubdomainToScope(sub);
+      allSubdomains.add(sub);
     }
     for (const sub of extractSubdomainsFromText(rootFetchResult.html, rootDomain)) {
-      addSubdomainToScope(sub);
+      allSubdomains.add(sub);
     }
 
     for (const link of rootLinks.internalUrls) {
@@ -395,10 +388,10 @@ export async function crawlDomain(
       if (current.depth < maxDepth) {
         const pageLinks = extractLinksAndSubdomains(pageRes.html, pageRes.finalUrl, startingHost);
         for (const sub of pageLinks.discoveredSubdomains) {
-          addSubdomainToScope(sub);
+          allSubdomains.add(sub);
         }
         for (const sub of extractSubdomainsFromText(pageRes.html, rootDomain)) {
-          addSubdomainToScope(sub);
+          allSubdomains.add(sub);
         }
 
         for (const nextLink of pageLinks.internalUrls) {
