@@ -890,8 +890,16 @@ export function useCrawlerController(
 
     // 2. Clear all browser localStorage and sessionStorage caches
     try {
-      localStorage.removeItem(STORAGE_KEY_RESULTS);
-      localStorage.removeItem('the_scrapper_targets_queue');
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && (k.startsWith('the_scrapper_') || k.startsWith('scrapper_'))) {
+          keysToRemove.push(k);
+        }
+      }
+      for (const k of keysToRemove) {
+        localStorage.removeItem(k);
+      }
       sessionStorage.clear();
     } catch (e) {}
 
@@ -965,7 +973,8 @@ export function useCrawlerController(
   );
 
   // Calculate strictly monotonic, glitch-free progress (0 to 100%)
-  const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + targetsRef.current.length);
+  const pendingTargetsCount = targetsRef.current.filter((t) => !t.status || t.status === 'pending').length;
+  const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + pendingTargetsCount);
   let dynamicProgress = 0;
   if (status === 'COMPLETED') {
     dynamicProgress = 100;

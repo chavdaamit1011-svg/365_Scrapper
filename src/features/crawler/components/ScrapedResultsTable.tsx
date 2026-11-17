@@ -36,6 +36,7 @@ import { TargetItem } from '@/features/targets/types/target.types';
 import { exportCrawlerResultsToCSV, exportSingleTargetToCSV } from '../utils/exportCrawlerResults';
 import { SubdomainListExplorer } from './SubdomainListExplorer';
 import { buildPhoneRedirectUrl, ScrapedPhoneDetail } from '@/lib/crawler/phoneExtractor';
+import { getComprehensiveGovSubdomains } from '@/lib/crawler/govSubdomainsRegistry';
 
 interface ScrapedResultsTableProps {
   records: ScrapedDataRecord[];
@@ -401,10 +402,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         const clean = r.domain.replace(/^\./, '').trim().toLowerCase();
         if (clean) tldZoneKeys.add(`.${clean}`);
       }
-      if (r.tldZone) {
-        const clean = r.tldZone.replace(/^\./, '').trim().toLowerCase();
-        if (clean) tldZoneKeys.add(`.${clean}`);
-      }
     }
 
     const explicitIndividualTargetSet = new Set<string>();
@@ -473,94 +470,98 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         }
       }
 
-      // Attach merged government subdomains to gov.in
+      // Attach comprehensive government subdomains to gov.in
       if (tld === '.in') {
         let govRecord = childList.find((c) => c.domain.toLowerCase() === 'gov.in');
-        if (!govRecord) {
-          const defaultGovSubdomains = [
-            'digitalindia.gov.in',
-            'cowin.gov.in',
-            'incometax.gov.in',
-            'epfindia.gov.in',
-            'ceogujarat.gov.in',
-            'india.gov.in',
-            'uidai.gov.in',
-            'gst.gov.in',
-            'passportindia.gov.in',
-            'pmindia.gov.in',
-            'eci.gov.in',
-            'parivahan.gov.in',
-            'cbic.gov.in',
-            'mha.gov.in',
-            'mea.gov.in',
-            'mof.gov.in',
-            'upsc.gov.in',
-            'isro.gov.in',
-            'drdo.gov.in',
-            'digital.gov.in',
-          ];
-          for (const s of defaultGovSubdomains) govSubsMerged.add(s);
-          const allGov = Array.from(govSubsMerged).filter(Boolean);
-          govRecord = {
-            id: 'dom_gov_in',
-            domain: 'gov.in',
-            rootDomain: 'gov.in',
-            subdomain: 'gov.in',
-            subdomains: allGov,
-            subdomainCount: allGov.length,
-            email: 'support@gov.in',
-            emails: ['support@gov.in'],
-            phones: ['1800-111-555'],
-            crawledPages: [],
-            pagesCrawled: 1,
-            category: 'Government & Public Administration',
-            categoryIcon: '🏛️',
-            country: 'India',
-            countryCode: 'IN',
-            countryFlag: '🇮🇳',
-            status: 'RESOLVED',
-            summary: 'Official Government of India central portal network and digital services infrastructure.',
-            discoveredAt: new Date().toISOString(),
-          };
-          childList.push(govRecord);
-        } else {
-          const merged = Array.from(new Set([...(govRecord.subdomains || []), ...Array.from(govSubsMerged)])).filter(Boolean).sort();
-          govRecord.subdomains = merged;
-          govRecord.subdomainCount = merged.length;
+        const existingGovDoc = allNormalized.find((r) => r.domain.toLowerCase() === 'gov.in');
+        if (existingGovDoc) {
+          groupedChildDomainIds.add(existingGovDoc.id);
         }
 
-        let nicRecord = childList.find((c) => c.domain.toLowerCase() === 'nic.in');
-        if (!nicRecord) {
-          const defaultNicSubdomains = ['ssc.nic.in', 'morth.nic.in', 'cbse.nic.in', 'jeemain.nic.in'];
-          for (const s of defaultNicSubdomains) nicSubsMerged.add(s);
-          const allNic = Array.from(nicSubsMerged).filter(Boolean);
-          nicRecord = {
-            id: 'dom_nic_in',
-            domain: 'nic.in',
-            rootDomain: 'nic.in',
-            subdomain: 'nic.in',
-            subdomains: allNic,
-            subdomainCount: allNic.length,
-            email: 'support@nic.in',
-            emails: ['support@nic.in'],
-            phones: ['1800-111-555'],
-            crawledPages: [],
-            pagesCrawled: 1,
-            category: 'Government & Public Administration',
-            categoryIcon: '🏛️',
-            country: 'India',
-            countryCode: 'IN',
-            countryFlag: '🇮🇳',
-            status: 'RESOLVED',
-            summary: 'National Informatics Centre (NIC) e-governance and public digital services network.',
-            discoveredAt: new Date().toISOString(),
-          };
-          childList.push(nicRecord);
-        } else {
-          const merged = Array.from(new Set([...(nicRecord.subdomains || []), ...Array.from(nicSubsMerged)])).filter(Boolean).sort();
-          nicRecord.subdomains = merged;
-          nicRecord.subdomainCount = merged.length;
+        const comprehensiveGovSubs = getComprehensiveGovSubdomains();
+        for (const s of comprehensiveGovSubs) govSubsMerged.add(s);
+        const allGov = Array.from(govSubsMerged).filter(Boolean).sort();
+
+        if (!govRecord) {
+          if (existingGovDoc) {
+            govRecord = { ...existingGovDoc };
+          } else {
+            govRecord = {
+              id: 'dom_gov_in',
+              domain: 'gov.in',
+              rootDomain: 'gov.in',
+              subdomain: 'gov.in',
+              subdomains: allGov,
+              subdomainCount: allGov.length,
+              email: 'support@gov.in',
+              emails: ['support@gov.in'],
+              phones: ['1800-111-555'],
+              crawledPages: [],
+              pagesCrawled: 1,
+              category: 'Government & Public Administration',
+              categoryIcon: '🏛️',
+              country: 'India',
+              countryCode: 'IN',
+              countryFlag: '🇮🇳',
+              status: 'RESOLVED',
+              summary: 'Official Government of India central portal network and digital services infrastructure.',
+              discoveredAt: new Date().toISOString(),
+            };
+          }
+          childList.push(govRecord);
         }
+
+        const mergedGov = Array.from(new Set([...(govRecord.subdomains || []), ...allGov])).filter(Boolean).sort();
+        govRecord.subdomains = mergedGov;
+        govRecord.subdomainCount = mergedGov.length;
+
+        let nicRecord = childList.find((c) => c.domain.toLowerCase() === 'nic.in');
+        const existingNicDoc = allNormalized.find((r) => r.domain.toLowerCase() === 'nic.in');
+        if (existingNicDoc) {
+          groupedChildDomainIds.add(existingNicDoc.id);
+        }
+
+        const defaultNicSubdomains = [
+          'ssc.nic.in', 'morth.nic.in', 'cbse.nic.in', 'jeemain.nic.in', 'upsc.nic.in',
+          'supremecourtofindia.nic.in', 'indiannavy.nic.in', 'indianairforce.nic.in',
+          'nrega.nic.in', 'eproc.nic.in', 'davp.nic.in', 'publicationsdivision.nic.in',
+          'consumeraffairs.nic.in', 'fert.nic.in', 'chemicals.nic.in', 'petroleum.nic.in', 'coal.nic.in'
+        ];
+        for (const s of defaultNicSubdomains) nicSubsMerged.add(s);
+        const allNic = Array.from(nicSubsMerged).filter(Boolean).sort();
+
+        if (!nicRecord) {
+          if (existingNicDoc) {
+            nicRecord = { ...existingNicDoc };
+          } else {
+            nicRecord = {
+              id: 'dom_nic_in',
+              domain: 'nic.in',
+              rootDomain: 'nic.in',
+              subdomain: 'nic.in',
+              subdomains: allNic,
+              subdomainCount: allNic.length,
+              email: 'support@nic.in',
+              emails: ['support@nic.in'],
+              phones: ['1800-111-555'],
+              crawledPages: [],
+              pagesCrawled: 1,
+              category: 'Government & Public Administration',
+              categoryIcon: '🏛️',
+              country: 'India',
+              countryCode: 'IN',
+              countryFlag: '🇮🇳',
+              status: 'RESOLVED',
+              summary: 'National Informatics Centre (NIC) e-governance and public digital services network.',
+              discoveredAt: new Date().toISOString(),
+            };
+          }
+          childList.push(nicRecord);
+        }
+
+        const mergedNic = Array.from(new Set([...(nicRecord.subdomains || []), ...allNic])).filter(Boolean).sort();
+        nicRecord.subdomains = mergedNic;
+        nicRecord.subdomainCount = mergedNic.length;
       }
 
       const existingMaster = allNormalized.find((r) => r.domain === tld || r.domain === tld.replace(/^\./, ''));
@@ -672,29 +673,38 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
         const existsInLive = live.some((g) => g.domain.toLowerCase().trim() === activeDomain);
         if (!existsInLive) {
           const isTld = activeDomain.startsWith('.');
+          const existingDoc = records.find((r) => r.domain.toLowerCase().trim() === activeDomain);
+          const activeWorkerForDomain = activeWorkers?.find(
+            (w) => w.domain?.toLowerCase().trim() === activeDomain || w.subTarget?.toLowerCase().trim() === activeDomain
+          );
+          const liveSubs = existingDoc?.subdomains && existingDoc.subdomains.length > 0
+            ? existingDoc.subdomains
+            : [];
+          const liveSubCount = existingDoc?.subdomainCount || liveSubs.length || activeWorkerForDomain?.subdomainsCount || 0;
+
           live.push({
-            id: isTld ? `tld_zone_${activeDomain.replace(/^\./, '')}` : `live_active_${activeDomain}`,
+            id: isTld ? `tld_zone_${activeDomain.replace(/^\./, '')}` : (existingDoc?.id || `live_active_${activeDomain}`),
             domain: activeDomain,
             rootDomain: activeDomain,
             subdomain: activeDomain,
-            subdomains: [],
-            subdomainCount: 0,
-            email: '',
-            emails: [],
-            phones: [],
-            crawledPages: [],
-            pagesCrawled: 0,
-            category: isTld ? 'TLD Zone Scope' : 'Deep Recon & Subdomain Discovery...',
-            categoryIcon: '🌐',
-            country: activeDomain.endsWith('.in') ? 'India' : 'Global',
-            countryCode: activeDomain.endsWith('.in') ? 'IN' : 'INT',
-            countryFlag: activeDomain.endsWith('.in') ? '🇮🇳' : '🌐',
+            subdomains: liveSubs,
+            subdomainCount: liveSubCount,
+            email: existingDoc?.email || '',
+            emails: existingDoc?.emails || [],
+            phones: existingDoc?.phones || [],
+            crawledPages: existingDoc?.crawledPages || [],
+            pagesCrawled: existingDoc?.pagesCrawled || activeWorkerForDomain?.pagesCrawled || 0,
+            category: isTld ? 'TLD Zone Scope' : (existingDoc?.category || 'Deep Recon & Subdomain Discovery...'),
+            categoryIcon: existingDoc?.categoryIcon || (isTld ? '🌐' : '🔍'),
+            country: existingDoc?.country || (activeDomain.endsWith('.in') ? 'India' : 'Global'),
+            countryCode: existingDoc?.countryCode || (activeDomain.endsWith('.in') ? 'IN' : 'INT'),
+            countryFlag: existingDoc?.countryFlag || (activeDomain.endsWith('.in') ? '🇮🇳' : '🌐'),
             status: 'CRAWLING',
-            discoveredAt: new Date().toISOString(),
+            discoveredAt: existingDoc?.discoveredAt || new Date().toISOString(),
             isTldZone: isTld,
-            tldZone: isTld ? activeDomain : undefined,
-            childDomains: [],
-            childDomainCount: 0,
+            tldZone: isTld ? activeDomain : existingDoc?.tldZone,
+            childDomains: existingDoc?.childDomains || [],
+            childDomainCount: existingDoc?.childDomainCount || 0,
           });
         }
       }
@@ -784,8 +794,16 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       setExpandedDomainId(null);
       // Immediately purge all browser local storage and session caches
       try {
-        localStorage.removeItem('the_scrapper_scraped_results');
-        localStorage.removeItem('the_scrapper_targets_queue');
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.startsWith('the_scrapper_') || k.startsWith('scrapper_'))) {
+            keysToRemove.push(k);
+          }
+        }
+        for (const k of keysToRemove) {
+          localStorage.removeItem(k);
+        }
         sessionStorage.clear();
       } catch (e) {}
 
@@ -1799,7 +1817,35 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                             </div>
                           </div>
                         ) : subdomains.length === 0 ? (
-                          <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+                          r.status === 'CRAWLING' ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                              <span
+                                style={{
+                                  fontSize: '11px',
+                                  fontWeight: 700,
+                                  color: '#0284c7',
+                                  background: '#e0f2fe',
+                                  padding: '2px 8px',
+                                  borderRadius: '6px',
+                                  border: '1px solid #bae6fd',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: '5px',
+                                }}
+                              >
+                                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#0284c7' }} />
+                                {(() => {
+                                  const activeWorkerForDomain = activeWorkers?.find(
+                                    (w) => w.domain?.toLowerCase().trim() === r.domain?.toLowerCase().trim() || w.subTarget?.toLowerCase().trim() === r.domain?.toLowerCase().trim()
+                                  );
+                                  const liveCnt = activeWorkerForDomain?.subdomainsCount || r.subdomainCount || 0;
+                                  return liveCnt > 0 ? `${liveCnt.toLocaleString()} Subs (Recon...)` : 'Scanning subdomains...';
+                                })()}
+                              </span>
+                            </div>
+                          ) : (
+                            <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
+                          )
                         ) : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
                             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' }}>

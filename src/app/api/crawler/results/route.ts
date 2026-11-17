@@ -104,103 +104,40 @@ export async function GET() {
     const orphanIdSet = new Set(orphanGovIdsToDelete.map((id) => String(id)));
     let docs = rawDocs.filter((d: any) => !orphanIdSet.has(String(d._id)));
 
-    // Ensure gov.in document exists and has all government subdomains aggregated
+    // Guarantee strictly single authoritative instance for gov.in and nic.in
+    const seenDominant = new Set<string>();
+    docs = docs.filter((d: any) => {
+      const dom = (d.domain || '').toLowerCase().trim();
+      if (dom === 'gov.in' || dom === 'nic.in') {
+        if (seenDominant.has(dom)) return false;
+        seenDominant.add(dom);
+      }
+      return true;
+    });
+
+    // If gov.in document exists in DB, ensure any discovered government subdomains are merged into it
     let govDoc = docs.find((d: any) => d.domain === 'gov.in');
     const uniqueGovSubs = Array.from(new Set(govSubsToMerge)).filter(Boolean);
-    if (!govDoc) {
-      govDoc = {
-        _id: 'dom_gov_in',
-        id: 'dom_gov_in',
-        domain: 'gov.in',
-        rootDomain: 'gov.in',
-        subdomain: 'gov.in',
-        subdomains: uniqueGovSubs,
-        subdomainCount: uniqueGovSubs.length,
-        email: 'support@gov.in',
-        emails: ['support@gov.in'],
-        verifiedEmails: ['support@gov.in'],
-        phones: ['1800-111-555'],
-        scrapedPhones: [],
-        category: 'Government & Public Administration',
-        categoryIcon: '🏛️',
-        country: 'India',
-        countryCode: 'IN',
-        countryFlag: '🇮🇳',
-        status: 'RESOLVED',
-        tldZone: '.in',
-        isTldZone: false,
-        isExplicitTarget: false,
-        summary: 'Official Government of India national portal network and central digital services infrastructure.',
-        crawledPages: [],
-        pagesCrawled: 1,
-        discoveredAt: new Date().toISOString(),
-      };
-      docs.push(govDoc);
-      MongoScrapedResultModel.updateOne(
-        { domain: 'gov.in' },
-        { $setOnInsert: govDoc, $addToSet: { subdomains: { $each: uniqueGovSubs } } },
-        { upsert: true }
-      ).catch(() => {});
-    } else {
+    if (govDoc && uniqueGovSubs.length > 0) {
       const merged = Array.from(new Set([...(govDoc.subdomains || []), ...uniqueGovSubs])).filter(Boolean);
       govDoc.subdomains = merged;
       govDoc.subdomainCount = merged.length;
-      govDoc.tldZone = '.in';
-      govDoc.isTldZone = false;
-      govDoc.isExplicitTarget = false;
       MongoScrapedResultModel.updateOne(
         { _id: govDoc._id },
-        { $addToSet: { subdomains: { $each: uniqueGovSubs } }, $set: { tldZone: '.in', isExplicitTarget: false, subdomainCount: merged.length } }
+        { $addToSet: { subdomains: { $each: uniqueGovSubs } }, $set: { subdomainCount: merged.length } }
       ).catch(() => {});
     }
 
-    // Ensure nic.in document exists
+    // If nic.in document exists in DB, ensure any discovered nic subdomains are merged into it
     let nicDoc = docs.find((d: any) => d.domain === 'nic.in');
     const uniqueNicSubs = Array.from(new Set(nicSubsToMerge)).filter(Boolean);
-    if (!nicDoc) {
-      nicDoc = {
-        _id: 'dom_nic_in',
-        id: 'dom_nic_in',
-        domain: 'nic.in',
-        rootDomain: 'nic.in',
-        subdomain: 'nic.in',
-        subdomains: uniqueNicSubs,
-        subdomainCount: uniqueNicSubs.length,
-        email: 'support@nic.in',
-        emails: ['support@nic.in'],
-        verifiedEmails: ['support@nic.in'],
-        phones: ['1800-111-555'],
-        scrapedPhones: [],
-        category: 'Government & Public Administration',
-        categoryIcon: '🏛️',
-        country: 'India',
-        countryCode: 'IN',
-        countryFlag: '🇮🇳',
-        status: 'RESOLVED',
-        tldZone: '.in',
-        isTldZone: false,
-        isExplicitTarget: false,
-        summary: 'National Informatics Centre (NIC) e-governance and public digital services network.',
-        crawledPages: [],
-        pagesCrawled: 1,
-        discoveredAt: new Date().toISOString(),
-      };
-      docs.push(nicDoc);
-      MongoScrapedResultModel.updateOne(
-        { domain: 'nic.in' },
-        { $setOnInsert: nicDoc, $addToSet: { subdomains: { $each: uniqueNicSubs } } },
-        { upsert: true }
-      ).catch(() => {});
-    } else {
+    if (nicDoc && uniqueNicSubs.length > 0) {
       const merged = Array.from(new Set([...(nicDoc.subdomains || []), ...uniqueNicSubs])).filter(Boolean);
       nicDoc.subdomains = merged;
       nicDoc.subdomainCount = merged.length;
-      nicDoc.tldZone = '.in';
-      nicDoc.isTldZone = false;
-      nicDoc.isExplicitTarget = false;
       MongoScrapedResultModel.updateOne(
         { _id: nicDoc._id },
-        { $addToSet: { subdomains: { $each: uniqueNicSubs } }, $set: { tldZone: '.in', isExplicitTarget: false, subdomainCount: merged.length } }
+        { $addToSet: { subdomains: { $each: uniqueNicSubs } }, $set: { subdomainCount: merged.length } }
       ).catch(() => {});
     }
 
@@ -433,6 +370,10 @@ export async function DELETE() {
           'dorking_jobs',
           'dorking_results',
           'crawl_jobs',
+          'targets',
+          'domains',
+          'subdomains',
+          'target_scopes',
         ];
 
         for (const collName of collections) {

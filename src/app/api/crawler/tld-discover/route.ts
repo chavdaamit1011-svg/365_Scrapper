@@ -123,6 +123,7 @@ export async function POST(req: Request) {
               $set: {
                 tldZone: '.in',
                 isExplicitTarget: false,
+                subdomainCount: defaultGovSubdomains.length,
                 summary: 'Official Government of India central portal network and digital services infrastructure.',
                 updatedAt: new Date(),
               },
