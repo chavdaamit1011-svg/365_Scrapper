@@ -41,18 +41,15 @@ export function isTldZone(raw: string): boolean {
 
   if (!bare) return false;
 
-  // 1. Check multi-part TLDs (e.g. gov.in, co.in, co.uk)
-  if (MULTI_PART_TLDS.has(bare)) {
-    return true;
+  // 1. If explicitly prefixed with '.' or '*.' (e.g. .in, *.in, .com, *.com, .gov.in, *.gov.in)
+  if (hasWildcardOrDotPrefix) {
+    if (COMMON_TLDS.has(bare) || MULTI_PART_TLDS.has(bare) || /^[a-zA-Z]{2,24}$/.test(bare)) {
+      return true;
+    }
   }
 
-  // 2. Check if it's a known single-part TLD
-  if (COMMON_TLDS.has(bare)) {
-    return true;
-  }
-
-  // 3. If explicitly prefixed with '.' or '*.' and contains 2-24 valid letters
-  if (hasWildcardOrDotPrefix && /^[a-zA-Z]{2,24}$/.test(bare)) {
+  // 2. Single-part bare TLD (no internal dots, e.g. "in", "com", "org", "net")
+  if (!bare.includes('.') && COMMON_TLDS.has(bare)) {
     return true;
   }
 

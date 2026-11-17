@@ -47,6 +47,7 @@ export function useCrawlerController(
   const liveSessionDomainsRef = useRef<Set<string>>(new Set());
   const [zoneDiscoveredCount, setZoneDiscoveredCount] = useState<number>(0);
   const zoneDiscoveredCountRef = useRef<number>(0);
+  const maxSessionProgressRef = useRef<number>(0);
 
   // Pool of Concurrent Active Workers (Up to MAX_CONCURRENT_WORKERS = 3)
   const activeWorkersRef = useRef<Map<string, ActiveWorkerData>>(new Map());
@@ -159,7 +160,9 @@ export function useCrawlerController(
     const primaryDomain = tldTarget ? tldTarget.domain : workers[0].target.domain;
     setCurrentTargetName(primaryDomain);
 
-    const avgProgress = Math.round(workers.reduce((acc, w) => acc + (w.progress || 20), 0) / workers.length);
+    const avgProgress = workers.length > 0
+      ? Math.round(workers.reduce((acc, w) => acc + (w.progress || 1), 0) / workers.length)
+      : 1;
     setTargetSubProgress(avgProgress);
 
     const isTld = Boolean(tldTarget) || primaryDomain.startsWith('.');
@@ -220,11 +223,11 @@ export function useCrawlerController(
   const runSingleTargetCycle = async (target: TargetItem) => {
     activeWorkersRef.current.set(target.id, {
       target,
-      progress: 20,
+      progress: 5,
       pagesCrawled: 0,
       subdomainsCount: 0,
       emailsCount: 0,
-      phase: `⚡ Deep Recon & Subdomain Discovery for ${target.domain}`,
+      phase: `⚡ Initializing Reconnaissance for ${target.domain}...`,
     });
 
     target.status = 'crawling';
@@ -235,6 +238,7 @@ export function useCrawlerController(
     liveSessionDomainsRef.current.add(target.domain.toLowerCase());
     setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
 
+    setTargetSubProgress(5);
     updateWorkerTelemetry();
 
     const interactiveMaxPages = 25;
@@ -272,9 +276,10 @@ export function useCrawlerController(
       if (activeWorkersRef.current.has(target.id)) {
         const workerData = activeWorkersRef.current.get(target.id)!;
         workerData.jobId = jobId || undefined;
-        workerData.progress = 30;
-        workerData.phase = `⚡ Deep Recon & Page Scraping for ${target.domain}`;
+        workerData.progress = 10;
+        workerData.phase = `⚡ Resolving DNS & Subdomain Recon for ${target.domain}...`;
       }
+      setTargetSubProgress(10);
       updateWorkerTelemetry();
 
       // 2. Poll job status until completed
@@ -306,10 +311,22 @@ export function useCrawlerController(
                 w.subdomainsCount = j.subdomainsCount || 0;
                 w.emailsCount = j.emailsCount || 0;
                 w.pagesCrawled = j.pagesCrawled || 0;
-                w.progress = Math.min(
-                  95,
-                  Math.round(((j.pagesCrawled || 1) / interactiveMaxPages) * 65) + 30
-                );
+
+                if (isDone) {
+                  w.progress = 100;
+                  w.phase = `✅ [Completed] ${target.domain}: ${w.pagesCrawled} pages, ${w.subdomainsCount} subdomains, ${w.emailsCount} emails`;
+                } else {
+                  // Dynamic smooth progress from 10% to 95%:
+                  const reconTicks = Math.min(25, pollAttempts * 4);
+                  const subBonus = (j.subdomainsCount || 0) > 0 ? 15 : 0;
+                  const pagesDone = j.pagesCrawled || 0;
+                  const pageProgress = Math.round((Math.min(pagesDone, interactiveMaxPages) / interactiveMaxPages) * 50);
+
+                  w.progress = Math.min(95, Math.max(w.progress || 10, 10 + reconTicks + subBonus + pageProgress));
+                  w.phase = pagesDone > 0
+                    ? `⚡ [Crawling] ${target.domain}: ${pagesDone}/${interactiveMaxPages} pages, ${w.subdomainsCount} subdomains, ${w.emailsCount} emails`
+                    : `⚡ [Reconnaissance] ${target.domain}: Resolving DNS & Discovering Subdomains (${w.subdomainsCount} found)...`;
+                }
               }
               updateWorkerTelemetry();
             }
@@ -346,8 +363,16 @@ export function useCrawlerController(
         }
       } catch (e) {}
 
+      // Keep 100% on the worker before deleting
+      if (activeWorkersRef.current.has(target.id)) {
+        activeWorkersRef.current.get(target.id)!.progress = 100;
+      }
+      setTargetSubProgress(100);
+      updateWorkerTelemetry();
+
       // Free worker slot
       activeWorkersRef.current.delete(target.id);
+      updateWorkerTelemetry();
       updateWorkerTelemetry();
     } catch (err) {
       console.warn(`[SequentialWorker] Error crawling ${target.domain}:`, err);
@@ -394,14 +419,14 @@ export function useCrawlerController(
           const discJson = await discRes.json();
           const rawDiscoveredList: string[] = Array.isArray(discJson.domains) ? discJson.domains : [];
 
-          // Normalize discovered list: collapse *.gov.in -> gov.in and *.nic.in -> nic.in
-          const isIndiaZone = target.domain.endsWith('.in');
+          // Normalize discovered list: collapse *.gov.in -> gov.in only when scraping generic .in zone
+          const isBroadIndiaTld = target.domain === '.in' || target.domain === '*.in' || target.domain === 'in';
           const discoveredList: string[] = [];
           const seenDom = new Set<string>();
 
           for (const rawD of rawDiscoveredList) {
             let norm = (rawD || '').toLowerCase().trim();
-            if (isIndiaZone) {
+            if (isBroadIndiaTld) {
               if (norm !== 'gov.in' && norm.endsWith('.gov.in')) norm = 'gov.in';
               else if (norm !== 'nic.in' && norm.endsWith('.nic.in')) norm = 'nic.in';
             }
@@ -461,7 +486,7 @@ export function useCrawlerController(
                   ...target,
                   domain: subDomainTarget,
                 },
-                progress: 20,
+                progress: 2,
                 pagesCrawled: 0,
                 subdomainsCount: 0,
                 emailsCount: 0,
@@ -512,8 +537,21 @@ export function useCrawlerController(
                           w.subdomainsCount = j.subdomainsCount || 0;
                           w.emailsCount = j.emailsCount || 0;
                           w.pagesCrawled = j.pagesCrawled || 0;
-                          w.progress = Math.min(95, Math.round(((j.pagesCrawled || 1) / maxPagesForDomain) * 60) + 35);
-                          w.phase = `⚡ [Worker #${slotIdx + 1}] ${subDomainTarget}: ${j.subdomainsCount || 0} subdomains, ${j.emailsCount || 0} emails`;
+
+                          if (isDone) {
+                            w.progress = 100;
+                            w.phase = `✅ [Worker #${slotIdx + 1}] ${subDomainTarget}: ${j.subdomainsCount || 0} subdomains, ${j.emailsCount || 0} emails`;
+                          } else {
+                            const reconTicks = Math.min(20, pollAttempts * 4);
+                            const pagesDone = j.pagesCrawled || 0;
+                            const pageRatio = Math.min(1, pagesDone / maxPagesForDomain);
+                            const reconBonus = (j.subdomainsCount || 0) > 0 ? 15 : 0;
+                            const pageBonus = Math.round(pageRatio * 70);
+                            w.progress = Math.min(95, Math.max(w.progress || 5, 5 + reconTicks + reconBonus + pageBonus));
+                            w.phase = pagesDone > 0
+                              ? `⚡ [Worker #${slotIdx + 1}] ${subDomainTarget}: ${pagesDone}/${maxPagesForDomain} pages (${j.subdomainsCount || 0} subs)`
+                              : `⚡ [Worker #${slotIdx + 1}] ${subDomainTarget}: Recon & discovering subdomains...`;
+                          }
                         }
                         updateWorkerTelemetry();
                       }
@@ -605,26 +643,31 @@ export function useCrawlerController(
         let target = currentTargets.find((t) => !t.status || t.status === 'pending');
 
         if (!target) {
-          // All targets in queue finished their current pass!
-          // Autonomously increment cycle and repeat across the target scope!
-          setCycleCount((prev) => {
-            const nextCycle = prev + 1;
-            console.log(`[ContinuousEngine] All targets processed. Advancing to Cycle #${nextCycle}...`);
-            return nextCycle;
-          });
+          // Check if there are active continuous TLD zones
+          const hasTldZoneTarget = currentTargets.some(
+            (t) => t.type === 'tld_zone' || t.domain.startsWith('.') || t.domain.startsWith('*.')
+          );
 
-          // Reset all targets to pending for the new autonomous cycle
-          for (const t of currentTargets) {
-            t.status = 'pending';
-            if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
+          if (isContinuousMode && hasTldZoneTarget) {
+            // Autonomous continuous cycle only for TLD zones
+            setCycleCount((prev) => prev + 1);
+            for (const t of currentTargets) {
+              t.status = 'pending';
+              if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
+            }
+            setActivePhase(`⚡ Cycle finished! Advancing to autonomous Cycle #${cycleCountRef.current + 1}...`);
+            await new Promise((r) => setTimeout(r, 1500));
+            if (isCancelledRef.current) break;
+            target = currentTargets[0];
+          } else {
+            // Target run completed at 100%!
+            setStatus('COMPLETED');
+            setTargetSubProgress(100);
+            setActivePhase('⚡ Scraping Completed Successfully (100%)');
+            activeWorkersRef.current.clear();
+            updateWorkerTelemetry();
+            break;
           }
-
-          setActivePhase(`⚡ Advancing to autonomous Cycle #${cycleCountRef.current + 1}...`);
-          // Polite 1.5s interval between full cycles
-          await new Promise((r) => setTimeout(r, 1500));
-          if (isCancelledRef.current) break;
-
-          target = currentTargets[0];
         }
 
         if (!target) continue;
@@ -670,6 +713,8 @@ export function useCrawlerController(
       setSessionTotal(queueToUse.length);
       setProcessedTargetsCount(0);
       setElapsedSeconds(0);
+      setTargetSubProgress(1);
+      maxSessionProgressRef.current = 1;
 
       startWorkerLoop();
     },
@@ -745,6 +790,7 @@ export function useCrawlerController(
     setCurrentTargetName(null);
     setActivePhase('Standby');
     setTargetSubProgress(0);
+    maxSessionProgressRef.current = 0;
 
     // Cancel active backend jobs so engine unblocks immediately
     fetch('/api/crawl-jobs/cancel', { method: 'POST' }).catch(() => {});
@@ -770,6 +816,7 @@ export function useCrawlerController(
     cycleCountRef.current = 1;
     setZoneDiscoveredCount(0);
     zoneDiscoveredCountRef.current = 0;
+    maxSessionProgressRef.current = 0;
     setActivePhase('Purging Database & Caches...');
     activeWorkersRef.current.clear();
     targetsRef.current = [];
@@ -845,19 +892,37 @@ export function useCrawlerController(
     0
   );
 
-  // Calculate genuine mathematical progress
+  // Calculate strictly monotonic, glitch-free progress (0 to 100%)
   const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + targetsRef.current.length);
   let dynamicProgress = 0;
   if (status === 'COMPLETED') {
     dynamicProgress = 100;
+    maxSessionProgressRef.current = 100;
   } else if (status === 'RUNNING' || status === 'PAUSED') {
     if (isTldZoneActive && activeZoneRootDomains > 0) {
-      dynamicProgress = Math.min(99, Math.max(1, Math.round((activeZoneScannedDomains / activeZoneRootDomains) * 100)));
+      const workers = Array.from(activeWorkersRef.current.values());
+      const workerProgressSum = workers.reduce((acc, w) => acc + (w.progress || 0), 0);
+      const activeWorkerFraction = workers.length > 0 ? (workerProgressSum / 100) : 0;
+
+      const combinedDone = activeZoneScannedDomains + activeWorkerFraction;
+      const calculatedPct = Math.round((combinedDone / activeZoneRootDomains) * 100);
+
+      const targetVal = Math.max(2, calculatedPct);
+      maxSessionProgressRef.current = Math.min(99, Math.max(maxSessionProgressRef.current, targetVal));
+      dynamicProgress = maxSessionProgressRef.current;
     } else {
-      dynamicProgress = Math.min(99, Math.max(1, targetSubProgress || Math.round((processedTargetsCount / effectiveTotal) * 100)));
+      const totalTargets = Math.max(1, effectiveTotal);
+      const finishedFraction = (processedTargetsCount / totalTargets) * 100;
+      const activeTargetFraction = (targetSubProgress / totalTargets);
+      const calculatedPct = Math.round(finishedFraction + activeTargetFraction);
+
+      const targetVal = Math.max(2, Math.max(targetSubProgress, calculatedPct));
+      maxSessionProgressRef.current = Math.min(99, Math.max(maxSessionProgressRef.current, targetVal));
+      dynamicProgress = maxSessionProgressRef.current;
     }
   } else if (status === 'CANCELLED') {
     dynamicProgress = 0;
+    maxSessionProgressRef.current = 0;
   }
 
   const activeWorkersList: ActiveWorkerSummary[] = Array.from(activeWorkersRef.current.entries()).map(

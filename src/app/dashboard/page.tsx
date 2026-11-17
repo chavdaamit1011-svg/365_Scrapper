@@ -75,9 +75,9 @@ export default function DashboardPage() {
     return targets.filter((t) => !t.status || t.status === 'pending');
   }, [targets]);
 
-  // Determine whether crawler workers are actively running or paused
-  const isAnyWorkerActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
-  const isScrapingActive = isAnyWorkerActive;
+  // Determine whether crawler workers are actively running, paused, or just completed
+  const isAnyWorkerActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED' || crawler.status === 'COMPLETED';
+  const isScrapingActive = crawler.status === 'RUNNING' || crawler.status === 'PAUSED';
 
   useEffect(() => {
     const session = getClientSession();
