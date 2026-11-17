@@ -37,6 +37,7 @@ export interface CrawlOptions {
   respectRobotsTxt?: boolean;
   tldZone?: string;
   isExplicitTarget?: boolean;
+  skipSubdomainRecon?: boolean;
   onProgress?: (pagesCrawled: number, subdomainsCount: number, emailsCount: number) => void;
 }
 

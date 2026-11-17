@@ -285,6 +285,9 @@ export async function GET() {
           effectiveTldZone = '.com';
         } else if (d.domain && d.domain.endsWith('.in')) {
           effectiveTldZone = '.in';
+        } else if (d.domain && d.domain.includes('.')) {
+          const parts = d.domain.toLowerCase().split('.');
+          effectiveTldZone = `.${parts[parts.length - 1]}`;
         }
       }
 

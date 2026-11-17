@@ -152,17 +152,26 @@ export async function crawlDomain(
     console.warn('[CrawlerEngine] Could not pre-load existing record:', err);
   }
 
-  // Step 1: Combined Multi-Source Subdomain Reconnaissance & Real Search Dorking
-  console.log(`[CrawlerEngine] Launching concurrent subdomain enumeration & search dorking for root: ${rootDomain}`);
-  try {
-    DorkingDiscoveryEngine.getInstance().startJob({ domain: rootDomain }).catch(() => {});
-  } catch {}
+  // Step 1: Subdomain Reconnaissance & Real Search Dorking
+  // In TLD zone mode (e.g. scraping .in or .com), we ONLY catalog main domains rapidly!
+  // Full deep subdomain recon is ONLY executed when a specific domain is explicitly targeted (e.g. gov.in, amazon.in)
+  const shouldSkipSubdomains = options.skipSubdomainRecon ?? (!options.isExplicitTarget && Boolean(options.tldZone));
 
-  const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain);
-  for (const s of discoveredSubdomainsList) {
-    addSafeSubdomain(s);
+  if (!shouldSkipSubdomains) {
+    console.log(`[CrawlerEngine] Launching concurrent subdomain enumeration & search dorking for root: ${rootDomain}`);
+    try {
+      DorkingDiscoveryEngine.getInstance().startJob({ domain: rootDomain }).catch(() => {});
+    } catch {}
+
+    const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain);
+    for (const s of discoveredSubdomainsList) {
+      addSafeSubdomain(s);
+    }
+    console.log(`[CrawlerEngine] Total OSINT subdomains discovered: ${allSubdomains.size}`);
+  } else {
+    console.log(`[CrawlerEngine] TLD Zone mode: Scanning main domain only (${rootDomain}). Skipping deep subdomain enumeration for rapid throughput.`);
+    addSafeSubdomain(`www.${rootDomain}`);
   }
-  console.log(`[CrawlerEngine] Total OSINT subdomains discovered: ${allSubdomains.size}`);
 
   // Immediate Checkpoint 1 to MongoDB so UI updates within 1.5 seconds with legitimate intelligence
   const initialClassification = classifySite('', startingHost);
