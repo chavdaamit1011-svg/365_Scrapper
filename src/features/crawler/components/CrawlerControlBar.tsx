@@ -322,7 +322,9 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
             </span>
             <span>•</span>
             <span>
-              {stats.processedTargets} processed
+              {stats.isTldZoneActive
+                ? `${stats.activeZoneScannedDomains || 0}/${stats.activeZoneRootDomains || 0} domains scanned`
+                : `${stats.processedTargets} processed`}
             </span>
             {stats.currentTargetName && (
               <>
@@ -443,8 +445,33 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                   }}
                 >
                   <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#0284c7', display: 'inline-block' }} />
-                  {worker.domain}
+                  {worker.domain.startsWith('.') ? `${worker.domain} Zone Scope` : worker.domain}
                 </div>
+
+                {worker.subTarget && (
+                  <div
+                    style={{
+                      fontSize: '11px',
+                      color: '#0369a1',
+                      background: '#e0f2fe',
+                      padding: '2px 7px',
+                      borderRadius: '4px',
+                      marginBottom: '6px',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      fontWeight: 600,
+                      border: '1px solid #bae6fd',
+                    }}
+                  >
+                    <span>⚡ Subdomain Recon: {worker.subTarget}</span>
+                    {typeof worker.subIndex === 'number' && typeof worker.totalSubTargets === 'number' && (
+                      <span style={{ color: '#0284c7', fontWeight: 700 }}>
+                        ({worker.subIndex}/{worker.totalSubTargets})
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#64748b' }}>
                   <span>🌐 <strong>{worker.subdomainsCount}</strong> Subs</span>
@@ -499,13 +526,17 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Session Target Scope
+              {stats.isTldZoneActive ? 'Zone Root Domains' : 'Session Target Scope'}
             </div>
             <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>
-              {stats.processedTargets} / {stats.totalTargets}
+              {stats.isTldZoneActive
+                ? `${stats.activeZoneScannedDomains || 0} / ${stats.activeZoneRootDomains || 0}`
+                : `${stats.processedTargets} / ${stats.totalTargets}`}
             </div>
             <div style={{ fontSize: '10.5px', color: '#0284c7', marginTop: '1px' }}>
-              {status === 'COMPLETED'
+              {stats.isTldZoneActive
+                ? `${stats.activeZoneRootDomains || 0} Root Domains Discovered`
+                : status === 'COMPLETED'
                 ? 'All Targets Processed'
                 : status === 'RUNNING'
                 ? `${Math.max(0, stats.totalTargets - stats.processedTargets)} Remaining`
@@ -543,7 +574,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Active Target Subdomains
+              {stats.isTldZoneActive ? 'Zone Discovered Subdomains' : 'Active Target Subdomains'}
             </div>
             <div style={{ fontSize: '15px', fontWeight: 700, color: '#7c3aed' }}>
               {status === 'RUNNING' && (stats.activeTargetSubdomains === null || stats.activeTargetSubdomains === undefined)
@@ -566,7 +597,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
               }}
               title={stats.currentTargetName || 'Active Target'}
             >
-              {stats.currentTargetName ? stats.currentTargetName : 'Scope Standby'}
+              {stats.isTldZoneActive && stats.currentTargetName ? `${stats.currentTargetName} Zone Scope` : (stats.currentTargetName ? stats.currentTargetName : 'Scope Standby')}
             </div>
           </div>
         </div>
@@ -600,7 +631,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Active Target Emails
+              {stats.isTldZoneActive ? 'Zone Verified Emails' : 'Active Target Emails'}
             </div>
             <div style={{ fontSize: '15px', fontWeight: 700, color: '#d97706' }}>
               {status === 'RUNNING' && (stats.activeTargetEmails === null || stats.activeTargetEmails === undefined)
@@ -612,7 +643,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 : '-'}
             </div>
             <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '1px' }}>
-              Legitimate verified
+              {stats.isTldZoneActive ? `Across ${stats.currentTargetName || 'zone'} domains` : 'Legitimate verified'}
             </div>
           </div>
         </div>

@@ -45,6 +45,8 @@ export function useCrawlerController(
   const [cycleCount, setCycleCount] = useState<number>(1);
   const [liveSessionDomains, setLiveSessionDomains] = useState<string[]>([]);
   const liveSessionDomainsRef = useRef<Set<string>>(new Set());
+  const [zoneDiscoveredCount, setZoneDiscoveredCount] = useState<number>(0);
+  const zoneDiscoveredCountRef = useRef<number>(0);
 
   // Pool of Concurrent Active Workers (Up to MAX_CONCURRENT_WORKERS = 3)
   const activeWorkersRef = useRef<Map<string, ActiveWorkerData>>(new Map());
@@ -110,6 +112,11 @@ export function useCrawlerController(
     } catch (e) {}
   }, [scrapedResults]);
 
+  const scrapedResultsRef = useRef<ScrapedDataRecord[]>([]);
+  useEffect(() => {
+    scrapedResultsRef.current = scrapedResults;
+  }, [scrapedResults]);
+
   // Elapsed seconds timer while RUNNING
   useEffect(() => {
     if (status === 'RUNNING') {
@@ -148,22 +155,65 @@ export function useCrawlerController(
       return;
     }
 
-    const currentWorker = workers[0];
-    const domain = (currentWorker as any).activeSubTarget || currentWorker.target.domain;
-    setCurrentTargetName(domain);
+    const tldTarget = targetsRef.current.find((t) => t.type === 'tld_zone' || t.domain.startsWith('.'));
+    const primaryDomain = tldTarget ? tldTarget.domain : workers[0].target.domain;
+    setCurrentTargetName(primaryDomain);
 
-    setTargetSubProgress(currentWorker.progress || 20);
+    const avgProgress = Math.round(workers.reduce((acc, w) => acc + (w.progress || 20), 0) / workers.length);
+    setTargetSubProgress(avgProgress);
 
-    const totalSubs = currentWorker.subdomainsCount || 0;
-    const totalEms = currentWorker.emailsCount || 0;
+    const isTld = Boolean(tldTarget) || primaryDomain.startsWith('.');
+
+    let totalSubs = 0;
+    let totalEms = 0;
+
+    if (isTld) {
+      const tldClean = primaryDomain.toLowerCase().trim();
+      const zDomains = scrapedResultsRef.current.filter((r) => {
+        if (r.isTldZone || r.isExplicitTarget) return false;
+        const rTld = r.tldZone ? (r.tldZone.startsWith('.') ? r.tldZone : '.' + r.tldZone).toLowerCase() : '';
+        return rTld === tldClean || r.domain.toLowerCase().endsWith(tldClean);
+      });
+      const zSubs = zDomains.reduce((acc, curr) => {
+        if (Array.isArray(curr.subdomains)) {
+          return acc + curr.subdomains.filter((s) => s.toLowerCase() !== curr.domain.toLowerCase()).length;
+        }
+        return acc + (curr.subdomainCount || 0);
+      }, 0);
+      const zEms = zDomains.reduce((acc, curr) => acc + (curr.emails?.length || (curr.email ? 1 : 0)), 0);
+
+      totalSubs = zSubs;
+      totalEms = zEms;
+    } else {
+      totalSubs = workers.reduce((acc, w) => acc + (w.subdomainsCount || 0), 0);
+      totalEms = workers.reduce((acc, w) => acc + (w.emailsCount || 0), 0);
+    }
+
     setActiveTargetResult({
       subdomains: totalSubs,
       emails: totalEms,
     });
 
-    setActivePhase(
-      `⚡ Sequential Engine: ${domain} (Cycle #${cycleCountRef.current}) • ${totalSubs} Subdomains Discovered`
-    );
+    if (isTld) {
+      const activeDomainsList = workers.map((w) => (w as any).activeSubTarget || w.target.domain).filter(Boolean);
+      if (activeDomainsList.length > 1) {
+        setActivePhase(
+          `⚡ [${activeDomainsList.length} Parallel Workers Active] Extracting subdomains for ${activeDomainsList.slice(0, 2).join(', ')}... • ${totalSubs} Subdomains Discovered (Cycle #${cycleCountRef.current})`
+        );
+      } else if (activeDomainsList.length === 1) {
+        setActivePhase(
+          `🌐 [${primaryDomain} Zone] Extracting subdomains for ${activeDomainsList[0]} • ${totalSubs} Subdomains Discovered (Cycle #${cycleCountRef.current})`
+        );
+      } else {
+        setActivePhase(
+          `🌐 [${primaryDomain} Zone] Scanning root domains (Cycle #${cycleCountRef.current}) • ${totalSubs} Subdomains Discovered`
+        );
+      }
+    } else {
+      setActivePhase(
+        `⚡ Sequential Engine: ${primaryDomain} (Cycle #${cycleCountRef.current}) • ${totalSubs} Subdomains Discovered`
+      );
+    }
   }, []);
 
   // Sequential Worker Execution for a single target pass
@@ -206,6 +256,7 @@ export function useCrawlerController(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             domain: target.domain,
+            is_explicit: true,
             max_pages: interactiveMaxPages,
             max_depth: interactiveMaxDepth,
             requests_per_second: 1,
@@ -307,17 +358,8 @@ export function useCrawlerController(
     }
   };
 
-  // 24/7 TLD Zone Discovery & Continuous Scraping Execution
+  // 24/7 TLD Zone Discovery & Continuous Scraping Execution with 3-Worker Parallel Pool
   const runTldZoneTargetCycle = async (target: TargetItem) => {
-    activeWorkersRef.current.set(target.id, {
-      target,
-      progress: 15,
-      pagesCrawled: 0,
-      subdomainsCount: 0,
-      emailsCount: 0,
-      phase: `🌐 24/7 TLD Zone Discovery: Scanning root domains for ${target.domain} (Cycle #${cycleCountRef.current})...`,
-    });
-
     target.status = 'crawling';
     if (onTargetStatusChange) {
       onTargetStatusChange(target.id, 'crawling');
@@ -325,145 +367,217 @@ export function useCrawlerController(
     liveSessionDomainsRef.current.add(target.domain.toLowerCase());
     setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
     setCurrentTargetName(target.domain);
-    updateWorkerTelemetry();
+
+    const CONCURRENT_WORKERS = 3;
+    let zoneCycle = cycleCountRef.current || 1;
 
     try {
-      if (isCancelledRef.current) return;
-
-      while (isPausedRef.current && !isCancelledRef.current) {
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (isCancelledRef.current) return;
-
-      // 1. Trigger TLD Discovery API (Certificate Transparency, Dorking, Seeds, Cross-Links)
-      const discRes = await fetch('/api/crawler/tld-discover', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          tld: target.domain,
-          cycle: cycleCountRef.current,
-          maxPerPass: 35,
-        }),
-      });
-
-      const discJson = await discRes.json();
-      const discoveredList: string[] = Array.isArray(discJson.domains) ? discJson.domains : [];
-
-      if (activeWorkersRef.current.has(target.id)) {
-        const workerData = activeWorkersRef.current.get(target.id)!;
-        workerData.progress = 25;
-        workerData.phase = `🌐 [${target.domain} Zone] Discovered ${discJson.totalDiscovered || discoveredList.length} root domains (Cycle #${cycleCountRef.current})`;
-      }
-      updateWorkerTelemetry();
-
-      // 2. Sequentially crawl discovered root domains with fast landing/contact reconnaissance
-      const interactiveMaxPages = 3;
-      const interactiveMaxDepth = 1;
-
-      for (let i = 0; i < discoveredList.length; i++) {
-        if (isCancelledRef.current) break;
-        while (isPausedRef.current && !isCancelledRef.current) {
-          await new Promise((r) => setTimeout(r, 400));
-        }
-        if (isCancelledRef.current) break;
-
-        const subDomainTarget = discoveredList[i];
-        const stepProgress = Math.min(95, Math.round(((i + 1) / discoveredList.length) * 70) + 25);
-
-        liveSessionDomainsRef.current.add(subDomainTarget.toLowerCase());
-        setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
-
-        if (activeWorkersRef.current.has(target.id)) {
-          const w = activeWorkersRef.current.get(target.id)!;
-          (w as any).activeSubTarget = subDomainTarget;
-          w.progress = stepProgress;
-          w.phase = `⚡ [${target.domain} Stream] Crawling ${subDomainTarget} (${i + 1}/${discoveredList.length}) [Cycle #${cycleCountRef.current}]`;
-        }
-        setCurrentTargetName(subDomainTarget);
-        updateWorkerTelemetry();
-
-        // Enqueue crawl job for discovered domain
+      // Non-stop 24/7 continuous discovery & scraping loop until user hits Stop Crawler
+      while (!isCancelledRef.current) {
         try {
-          const jobRes = await fetch('/api/crawl-jobs', {
+          while (isPausedRef.current && !isCancelledRef.current) {
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          if (isCancelledRef.current) break;
+
+          // 1. Trigger TLD Discovery API (Certificate Transparency, Dorking, Seeds, Cross-Links)
+          const discRes = await fetch('/api/crawler/tld-discover', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              domain: subDomainTarget,
-              max_pages: interactiveMaxPages,
-              max_depth: interactiveMaxDepth,
-              requests_per_second: 2,
-              respect_robots_txt: true,
-              tld_zone: target.domain,
+              tld: target.domain,
+              cycle: zoneCycle,
+              maxPerPass: 250,
             }),
           });
-          const jobJson = await jobRes.json();
-          const jobId = jobJson.job_id;
 
-          // Poll job status until done
-          let isDone = false;
-          let pollAttempts = 0;
-          while (!isDone && pollAttempts < 45 && !isCancelledRef.current && !isPausedRef.current) {
-            await new Promise((r) => setTimeout(r, 600));
-            pollAttempts++;
-            if (jobId) {
+          const discJson = await discRes.json();
+          const rawDiscoveredList: string[] = Array.isArray(discJson.domains) ? discJson.domains : [];
+
+          // Normalize discovered list: collapse *.gov.in -> gov.in and *.nic.in -> nic.in
+          const isIndiaZone = target.domain.endsWith('.in');
+          const discoveredList: string[] = [];
+          const seenDom = new Set<string>();
+
+          for (const rawD of rawDiscoveredList) {
+            let norm = (rawD || '').toLowerCase().trim();
+            if (isIndiaZone) {
+              if (norm !== 'gov.in' && norm.endsWith('.gov.in')) norm = 'gov.in';
+              else if (norm !== 'nic.in' && norm.endsWith('.nic.in')) norm = 'nic.in';
+            }
+            if (norm && !seenDom.has(norm)) {
+              seenDom.add(norm);
+              discoveredList.push(norm);
+            }
+          }
+
+          // Prioritize core hubs (gov.in, flipkart.in, amazon.in, etc.) first
+          const topHubs = ['gov.in', 'flipkart.in', 'amazon.in', 'swiggy.in', 'zomato.in', 'nic.in', 'tcs.in', 'infosys.in'];
+          discoveredList.sort((a, b) => {
+            const aHub = topHubs.indexOf(a);
+            const bHub = topHubs.indexOf(b);
+            if (aHub !== -1 && bHub !== -1) return aHub - bHub;
+            if (aHub !== -1) return -1;
+            if (bHub !== -1) return 1;
+            return 0;
+          });
+
+          // Track true total discovered root domains across the active zone
+          const totalDiscoveredSoFar = Math.max(discJson.totalDiscovered || 0, discoveredList.length);
+          zoneDiscoveredCountRef.current = totalDiscoveredSoFar;
+          setZoneDiscoveredCount(totalDiscoveredSoFar);
+
+          // Immediately refresh results so user sees all discovered root domains right away
+          try {
+            const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
+            const liveJson = await liveRes.json();
+            if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
+              setScrapedResults(liveJson.data);
+            }
+          } catch {}
+
+          // 2. Parallel Multi-Worker Concurrency Pool (3 Concurrency Slots)
+          let queueIndex = 0;
+
+          const runWorker = async (slotIdx: number) => {
+            const workerKey = `${target.id}_worker_${slotIdx}`;
+
+            while (queueIndex < discoveredList.length && !isCancelledRef.current) {
+              while (isPausedRef.current && !isCancelledRef.current) {
+                await new Promise((r) => setTimeout(r, 400));
+              }
+              if (isCancelledRef.current) break;
+
+              const myIndex = queueIndex++;
+              if (myIndex >= discoveredList.length) break;
+              const subDomainTarget = discoveredList[myIndex];
+
+              liveSessionDomainsRef.current.add(subDomainTarget.toLowerCase());
+              setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
+
+              // Set live worker telemetry state in activeWorkersRef
+              activeWorkersRef.current.set(workerKey, {
+                target: {
+                  ...target,
+                  domain: subDomainTarget,
+                },
+                progress: 20,
+                pagesCrawled: 0,
+                subdomainsCount: 0,
+                emailsCount: 0,
+                phase: `⚡ Deep Recon & Subdomain Discovery for ${subDomainTarget} (${myIndex + 1}/${discoveredList.length}) [Cycle #${zoneCycle}]`,
+                activeSubTarget: subDomainTarget,
+                activeSubIndex: myIndex + 1,
+                totalSubTargets: discoveredList.length,
+              } as any);
+              updateWorkerTelemetry();
+
+              // Enqueue crawl job with rapid reconnaissance (3-4s per domain, 15 pages for gov.in)
               try {
-                const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
-                const statusJson = await statusRes.json();
-                if (statusJson.success && statusJson.job) {
-                  const j = statusJson.job;
-                  if (j.status === 'completed' || j.status === 'failed') {
-                    isDone = true;
+                const maxPagesForDomain = subDomainTarget === 'gov.in' ? 15 : 5;
+                const maxDepthForDomain = 1;
+                const jobRes = await fetch('/api/crawl-jobs', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    domain: subDomainTarget,
+                    max_pages: maxPagesForDomain,
+                    max_depth: maxDepthForDomain,
+                    requests_per_second: 3,
+                    respect_robots_txt: true,
+                    tld_zone: target.domain,
+                    is_explicit: false,
+                  }),
+                });
+                const jobJson = await jobRes.json();
+                const jobId = jobJson.job_id;
+
+                // Poll job status until done (up to 40 attempts ~16 seconds max)
+                let isDone = false;
+                let pollAttempts = 0;
+                while (!isDone && pollAttempts < 40 && !isCancelledRef.current && !isPausedRef.current) {
+                  await new Promise((r) => setTimeout(r, 400));
+                  pollAttempts++;
+                  if (jobId) {
+                    try {
+                      const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
+                      const statusJson = await statusRes.json();
+                      if (statusJson.success && statusJson.job) {
+                        const j = statusJson.job;
+                        if (j.status === 'completed' || j.status === 'failed') {
+                          isDone = true;
+                        }
+                        if (activeWorkersRef.current.has(workerKey)) {
+                          const w = activeWorkersRef.current.get(workerKey)!;
+                          w.subdomainsCount = j.subdomainsCount || 0;
+                          w.emailsCount = j.emailsCount || 0;
+                          w.pagesCrawled = j.pagesCrawled || 0;
+                          w.progress = Math.min(95, Math.round(((j.pagesCrawled || 1) / maxPagesForDomain) * 60) + 35);
+                          w.phase = `⚡ [Worker #${slotIdx + 1}] ${subDomainTarget}: ${j.subdomainsCount || 0} subdomains, ${j.emailsCount || 0} emails`;
+                        }
+                        updateWorkerTelemetry();
+                      }
+                    } catch {}
                   }
-                  if (activeWorkersRef.current.has(target.id)) {
-                    const w = activeWorkersRef.current.get(target.id)!;
-                    w.subdomainsCount = j.subdomainsCount || 0;
-                    w.emailsCount = j.emailsCount || 0;
-                    w.pagesCrawled = j.pagesCrawled || 0;
+
+                  // Live database sync every 3 polls (~1.2s)
+                  if (pollAttempts % 3 === 0) {
+                    try {
+                      const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
+                      const liveJson = await liveRes.json();
+                      if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
+                        setScrapedResults(liveJson.data);
+                      }
+                    } catch {}
                   }
-                  updateWorkerTelemetry();
+                }
+              } catch (subErr) {
+                console.warn(`[TldZoneWorker] Crawl job failed for ${subDomainTarget}:`, subErr);
+              }
+
+              // Database sync after each domain completes
+              try {
+                const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
+                const liveJson = await liveRes.json();
+                if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
+                  setScrapedResults(liveJson.data);
                 }
               } catch {}
             }
-          }
-        } catch (subErr) {
-          console.warn(`[TldZoneWorker] Crawl job failed for ${subDomainTarget}:`, subErr);
-        }
 
-        // Live database sync after each domain completes
-        try {
-          const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-          const liveJson = await liveRes.json();
-          if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
-            setScrapedResults(liveJson.data);
-          }
-        } catch {}
+            activeWorkersRef.current.delete(workerKey);
+            updateWorkerTelemetry();
+          };
+
+          // Run 3 workers in parallel concurrently!
+          await Promise.all([runWorker(0), runWorker(1), runWorker(2)]);
+
+          if (isCancelledRef.current) break;
+
+          // Advance to next autonomous cycle without stopping
+          zoneCycle++;
+          setCycleCount(zoneCycle);
+          cycleCountRef.current = zoneCycle;
+          setProcessedTargetsCount((prev) => prev + 1);
+
+          // Quick 1.5s interval before next continuous discovery pass
+          await new Promise((r) => setTimeout(r, 1500));
+        } catch (cycleErr) {
+          console.warn(`[TldZoneWorker] Cycle #${zoneCycle} error, continuing:`, cycleErr);
+          await new Promise((r) => setTimeout(r, 2000));
+        }
       }
 
-      if (isCancelledRef.current) return;
-
-      // Mark TLD pass complete for this cycle
+      // Cleanup ONLY when user cancels / stops
       target.status = 'completed';
-      if (onTargetStatusChange) {
-        onTargetStatusChange(target.id, 'completed');
-      }
-      setProcessedTargetsCount((prev) => prev + 1);
-
-      // Refresh final database results
-      try {
-        const freshRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-        const freshJson = await freshRes.json();
-        if (freshJson.success && Array.isArray(freshJson.data) && freshJson.data.length > 0) {
-          setScrapedResults(freshJson.data);
-        }
-      } catch (e) {}
-
-      activeWorkersRef.current.delete(target.id);
+      if (onTargetStatusChange) onTargetStatusChange(target.id, 'completed');
+      activeWorkersRef.current.clear();
       updateWorkerTelemetry();
     } catch (err) {
       console.warn(`[TldZoneWorker] Error in zone discovery for ${target.domain}:`, err);
       target.status = 'completed';
       if (onTargetStatusChange) onTargetStatusChange(target.id, 'completed');
-      activeWorkersRef.current.delete(target.id);
+      activeWorkersRef.current.clear();
       updateWorkerTelemetry();
     }
   };
@@ -516,7 +630,8 @@ export function useCrawlerController(
         if (!target) continue;
 
         // Execute deep crawl or 24/7 TLD zone discovery for this target
-        if (target.type === 'tld_zone') {
+        const isTldTarget = target.type === 'tld_zone' || target.domain.startsWith('.') || target.domain.startsWith('*.');
+        if (isTldTarget) {
           await runTldZoneTargetCycle(target);
         } else {
           await runSingleTargetCycle(target);
@@ -653,6 +768,8 @@ export function useCrawlerController(
     setStatus('IDLE');
     setCycleCount(1);
     cycleCountRef.current = 1;
+    setZoneDiscoveredCount(0);
+    zoneDiscoveredCountRef.current = 0;
     setActivePhase('Purging Database & Caches...');
     activeWorkersRef.current.clear();
     targetsRef.current = [];
@@ -679,17 +796,6 @@ export function useCrawlerController(
     }
   }, [status]);
 
-  // Calculate dynamic progress
-  const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + targetsRef.current.length);
-  let dynamicProgress = 0;
-  if (status === 'COMPLETED') {
-    dynamicProgress = 100;
-  } else if (status === 'RUNNING' || status === 'PAUSED') {
-    dynamicProgress = Math.min(99, Math.max(10, targetSubProgress));
-  } else if (status === 'CANCELLED') {
-    dynamicProgress = 0;
-  }
-
   // Database lifetime totals
   const databaseTotalDomains = scrapedResults.length;
   const databaseTotalSubdomains = scrapedResults.reduce((acc, curr) => {
@@ -704,16 +810,72 @@ export function useCrawlerController(
   );
   const databaseTotalCountries = new Set(scrapedResults.map((r) => r.country).filter(Boolean)).size;
 
+  const isTldZoneActive = Boolean(currentTargetName && (currentTargetName.startsWith('.') || currentTargetName.startsWith('*.')));
+
+  // Calculate specific live metrics for active TLD zone scope
+  const activeZoneDomains = isTldZoneActive && currentTargetName
+    ? scrapedResults.filter((r) => {
+        if (r.isTldZone) return false;
+        if (r.isExplicitTarget) return false;
+        const cleanTarget = currentTargetName.replace(/^\*?\./, '').toLowerCase().trim();
+        const rTld = r.tldZone ? r.tldZone.replace(/^\*?\./, '').toLowerCase().trim() : '';
+        return rTld === cleanTarget || r.domain.toLowerCase().endsWith(`.${cleanTarget}`);
+      })
+    : [];
+
+  const activeZoneRootDomains = Math.max(activeZoneDomains.length, zoneDiscoveredCount, zoneDiscoveredCountRef.current);
+  const activeZoneScannedDomains = activeZoneDomains.filter(
+    (r) => r.status === 'RESOLVED' || (Array.isArray(r.subdomains) && r.subdomains.length > 0) || (r.pagesCrawled && r.pagesCrawled > 0)
+  ).length;
+
+  const activeZoneSubdomains = activeZoneDomains.reduce((acc, curr) => {
+    if (Array.isArray(curr.subdomains)) {
+      return acc + curr.subdomains.filter((s) => s.toLowerCase() !== curr.domain.toLowerCase()).length;
+    }
+    return acc + (curr.subdomainCount || 0);
+  }, 0);
+
+  const activeZoneEmails = activeZoneDomains.reduce(
+    (acc, curr) => acc + (curr.emails?.length || (curr.email ? 1 : 0)),
+    0
+  );
+
+  const activeZonePages = activeZoneDomains.reduce(
+    (acc, curr) => acc + (curr.pagesCrawled || curr.crawledPages?.length || 0),
+    0
+  );
+
+  // Calculate genuine mathematical progress
+  const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + targetsRef.current.length);
+  let dynamicProgress = 0;
+  if (status === 'COMPLETED') {
+    dynamicProgress = 100;
+  } else if (status === 'RUNNING' || status === 'PAUSED') {
+    if (isTldZoneActive && activeZoneRootDomains > 0) {
+      dynamicProgress = Math.min(99, Math.max(1, Math.round((activeZoneScannedDomains / activeZoneRootDomains) * 100)));
+    } else {
+      dynamicProgress = Math.min(99, Math.max(1, targetSubProgress || Math.round((processedTargetsCount / effectiveTotal) * 100)));
+    }
+  } else if (status === 'CANCELLED') {
+    dynamicProgress = 0;
+  }
+
   const activeWorkersList: ActiveWorkerSummary[] = Array.from(activeWorkersRef.current.entries()).map(
-    ([id, w]) => ({
-      id,
-      domain: (w as any).activeSubTarget || w.target.domain,
-      progress: w.progress,
-      pagesCrawled: w.pagesCrawled,
-      subdomainsCount: w.subdomainsCount,
-      emailsCount: w.emailsCount,
-      phase: w.phase,
-    })
+    ([id, w]) => {
+      const isWorkerTld = w.target.type === 'tld_zone' || w.target.domain.startsWith('.');
+      return {
+        id,
+        domain: w.target.domain,
+        subTarget: (w as any).activeSubTarget,
+        subIndex: (w as any).activeSubIndex,
+        totalSubTargets: (w as any).totalSubTargets || (isWorkerTld ? activeZoneRootDomains : undefined),
+        progress: w.progress,
+        pagesCrawled: isWorkerTld && activeZonePages > 0 ? activeZonePages : w.pagesCrawled,
+        subdomainsCount: isWorkerTld && activeZoneSubdomains > 0 ? activeZoneSubdomains : w.subdomainsCount,
+        emailsCount: isWorkerTld && activeZoneEmails > 0 ? activeZoneEmails : w.emailsCount,
+        phase: w.phase,
+      };
+    }
   );
 
   const stats: CrawlerStats = {
@@ -727,8 +889,8 @@ export function useCrawlerController(
     elapsedSeconds,
     currentTargetName,
     activeTargetPhase: activePhase,
-    activeTargetSubdomains: activeTargetResult ? activeTargetResult.subdomains : null,
-    activeTargetEmails: activeTargetResult ? activeTargetResult.emails : null,
+    activeTargetSubdomains: isTldZoneActive ? activeZoneSubdomains : (activeTargetResult ? activeTargetResult.subdomains : null),
+    activeTargetEmails: isTldZoneActive ? activeZoneEmails : (activeTargetResult ? activeTargetResult.emails : null),
     databaseTotalDomains,
     databaseTotalSubdomains,
     databaseTotalEmails,
@@ -736,6 +898,11 @@ export function useCrawlerController(
     cycleCount,
     isContinuous: isContinuousMode,
     activeWorkersList,
+    isTldZoneActive,
+    activeZoneRootDomains,
+    activeZoneScannedDomains,
+    activeZoneSubdomains,
+    activeZoneEmails,
   };
 
   return {

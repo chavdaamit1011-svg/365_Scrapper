@@ -94,6 +94,7 @@ export interface ScrapedDataRecord {
   discoveredAt: string;
   isTldZone?: boolean;
   tldZone?: string;
+  isExplicitTarget?: boolean;
   childDomains?: ScrapedDataRecord[];
   childDomainCount?: number;
 }
@@ -101,6 +102,9 @@ export interface ScrapedDataRecord {
 export interface ActiveWorkerSummary {
   id: string;
   domain: string;
+  subTarget?: string;
+  subIndex?: number;
+  totalSubTargets?: number;
   progress: number;
   pagesCrawled: number;
   subdomainsCount: number;
@@ -128,5 +132,10 @@ export interface CrawlerStats {
   cycleCount?: number;
   isContinuous?: boolean;
   activeWorkersList?: ActiveWorkerSummary[];
+  isTldZoneActive?: boolean;
+  activeZoneRootDomains?: number;
+  activeZoneScannedDomains?: number;
+  activeZoneSubdomains?: number;
+  activeZoneEmails?: number;
 }
 

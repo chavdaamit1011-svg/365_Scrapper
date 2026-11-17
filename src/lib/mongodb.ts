@@ -206,6 +206,7 @@ const ScrapedResultSchema = new mongoose.Schema(
     discoveredAt: { type: String, default: () => new Date().toISOString() },
     tldZone: { type: String, default: '', index: true },
     isTldZone: { type: Boolean, default: false },
+    isExplicitTarget: { type: Boolean, default: false, index: true },
   },
   {
     timestamps: true,

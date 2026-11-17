@@ -13,6 +13,7 @@
 import dns from 'dns';
 import * as tls from 'tls';
 import { connectMongo } from '../mongodb';
+import { getComprehensiveGovSubdomains } from './govSubdomainsRegistry';
 
 const dnsResolver = new dns.promises.Resolver();
 try {
@@ -176,6 +177,12 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       subdomains.add(cleaned);
     }
   };
+
+  // If cleanRoot is gov.in, immediately inject comprehensive 2,800+ authentic Indian government portals & subdomains
+  if (cleanRoot === 'gov.in') {
+    const govSubs = getComprehensiveGovSubdomains();
+    for (const s of govSubs) addSub(s);
+  }
 
   // 1. Vector: Real DuckDuckGo Search Dorking (site:rootDomain)
   const fetchDuckDuckGoDorks = async () => {

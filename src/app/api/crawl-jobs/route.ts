@@ -25,7 +25,8 @@ export async function POST(req: Request) {
     const maxDepth = Number(body.max_depth || body.maxDepth) || 2;
     const requestsPerSecond = Number(body.requests_per_second || body.requestsPerSecond) || 1;
     const respectRobotsTxt = body.respect_robots_txt !== undefined ? Boolean(body.respect_robots_txt) : true;
-    const tldZone = typeof body.tld_zone === 'string' ? body.tld_zone : (typeof body.tldZone === 'string' ? body.tldZone : undefined);
+    const tldZone = typeof body.tld_zone === 'string' && body.tld_zone.trim() ? body.tld_zone.trim() : (typeof body.tldZone === 'string' && body.tldZone.trim() ? body.tldZone.trim() : undefined);
+    const isExplicitTarget = body.is_explicit !== undefined ? Boolean(body.is_explicit) : !tldZone;
 
     // 1. Enqueue job into Redis
     const job = await redisQueue.enqueueCrawlJob({
@@ -48,6 +49,7 @@ export async function POST(req: Request) {
           maxDepth,
           delayMs: Math.max(100, Math.floor(1000 / requestsPerSecond)),
           tldZone,
+          isExplicitTarget,
           onProgress: (pages, subdomains, emails) => {
             redisQueue.updateJobStatus(job.id, 'running', {
               pagesCrawled: pages,

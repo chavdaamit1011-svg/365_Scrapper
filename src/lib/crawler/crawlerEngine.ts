@@ -198,8 +198,9 @@ export async function crawlDomain(
     pagesCrawled: visitedRecords.length,
     crawledPages: visitedRecords,
     discoveredAt: existingRecord?.discoveredAt || new Date().toISOString(),
-    tldZone: options.tldZone || existingRecord?.tldZone,
-    isTldZone: false,
+    tldZone: options.tldZone ? options.tldZone : '',
+    isTldZone: Boolean(startingHost.startsWith('.')),
+    isExplicitTarget: options.isExplicitTarget ?? !options.tldZone,
   };
 
   try {
@@ -562,8 +563,9 @@ export async function crawlDomain(
     pagesCrawled: visitedRecords.filter((p) => p.statusCode >= 200 && p.statusCode < 400).length,
     crawledPages: visitedRecords,
     discoveredAt: new Date().toISOString(),
-    tldZone: options.tldZone || existingRecord?.tldZone,
-    isTldZone: false,
+    tldZone: options.tldZone ? options.tldZone : '',
+    isTldZone: Boolean(startingHost.startsWith('.')),
+    isExplicitTarget: options.isExplicitTarget ?? !options.tldZone,
   };
 
   // Step 3: Phase 2 Reconciliation & Master Storage (UPSERT to MongoDB)

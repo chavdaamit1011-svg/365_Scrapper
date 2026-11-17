@@ -194,6 +194,16 @@ export default function DashboardPage() {
       const updated = [...cleanPrev, ...uniqueNew];
       try {
         localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(updated));
+
+        // Persist explicit individual targets so they are never grouped into a TLD zone
+        const explicitOnes = newItems
+          .filter((i) => i.type !== 'tld_zone' && !i.domain.startsWith('.') && !i.domain.startsWith('*.'))
+          .map((i) => i.domain.toLowerCase().trim());
+        if (explicitOnes.length > 0) {
+          const prevStored = JSON.parse(localStorage.getItem('the_scrapper_explicit_targets') || '[]');
+          const combined = Array.from(new Set([...prevStored, ...explicitOnes]));
+          localStorage.setItem('the_scrapper_explicit_targets', JSON.stringify(combined));
+        }
       } catch (e) {}
 
       // Autonomous Crawl Decision:
