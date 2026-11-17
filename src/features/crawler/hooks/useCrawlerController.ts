@@ -39,6 +39,8 @@ export function useCrawlerController(
   const [activeTargetResult, setActiveTargetResult] = useState<{
     subdomains: number;
     emails: number;
+    phones: number;
+    pages: number;
   } | null>(null);
 
   const [isContinuousMode, setIsContinuousMode] = useState<boolean>(true);
@@ -178,6 +180,8 @@ export function useCrawlerController(
 
     let totalSubs = 0;
     let totalEms = 0;
+    let totalPhs = 0;
+    let totalPgs = 0;
 
     if (isTld) {
       const tldClean = primaryDomain.toLowerCase().trim();
@@ -193,17 +197,40 @@ export function useCrawlerController(
         return acc + (curr.subdomainCount || 0);
       }, 0);
       const zEms = zDomains.reduce((acc, curr) => acc + (curr.emails?.length || (curr.email ? 1 : 0)), 0);
+      const zPhs = zDomains.reduce((acc, curr) => acc + (curr.phones?.length || 0), 0);
+      const zPgs = zDomains.reduce((acc, curr) => acc + (curr.pagesCrawled || curr.crawledPages?.length || 0), 0);
 
       totalSubs = zSubs;
       totalEms = zEms;
+      totalPhs = zPhs;
+      totalPgs = zPgs;
     } else {
       totalSubs = workers.reduce((acc, w) => acc + (w.subdomainsCount || 0), 0);
       totalEms = workers.reduce((acc, w) => acc + (w.emailsCount || 0), 0);
+      totalPgs = workers.reduce((acc, w) => acc + (w.pagesCrawled || 0), 0);
+
+      const currentDoc = scrapedResultsRef.current.find((r) => r.domain.toLowerCase() === primaryDomain.toLowerCase());
+      if (currentDoc) {
+        if (totalSubs === 0 && currentDoc.subdomains) {
+          totalSubs = currentDoc.subdomains.length;
+        }
+        if (totalEms === 0 && currentDoc.emails) {
+          totalEms = currentDoc.emails.length;
+        }
+        if (currentDoc.phones) {
+          totalPhs = currentDoc.phones.length;
+        }
+        if (totalPgs === 0 && (currentDoc.pagesCrawled || currentDoc.crawledPages)) {
+          totalPgs = currentDoc.pagesCrawled || currentDoc.crawledPages?.length || 0;
+        }
+      }
     }
 
     setActiveTargetResult({
       subdomains: totalSubs,
       emails: totalEms,
+      phones: totalPhs,
+      pages: totalPgs,
     });
 
     if (isTld) {
@@ -972,6 +999,11 @@ export function useCrawlerController(
     0
   );
 
+  const activeZonePhones = activeZoneDomains.reduce(
+    (acc, curr) => acc + (curr.phones?.length || 0),
+    0
+  );
+
   // Calculate strictly monotonic, glitch-free progress (0 to 100%)
   const pendingTargetsCount = targetsRef.current.filter((t) => !t.status || t.status === 'pending').length;
   const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + pendingTargetsCount);
@@ -1024,6 +1056,8 @@ export function useCrawlerController(
     activeTargetPhase: activePhase,
     activeTargetSubdomains: isTldZoneActive ? activeZoneSubdomains : (activeTargetResult ? activeTargetResult.subdomains : null),
     activeTargetEmails: isTldZoneActive ? activeZoneEmails : (activeTargetResult ? activeTargetResult.emails : null),
+    activeTargetPhones: isTldZoneActive ? activeZonePhones : (activeTargetResult ? activeTargetResult.phones : null),
+    activeTargetPages: isTldZoneActive ? activeZonePages : (activeTargetResult ? activeTargetResult.pages : (activeWorkersList?.[0]?.pagesCrawled || null)),
     databaseTotalDomains,
     databaseTotalSubdomains,
     databaseTotalEmails,
@@ -1036,6 +1070,7 @@ export function useCrawlerController(
     activeZoneScannedDomains,
     activeZoneSubdomains,
     activeZoneEmails,
+    activeZonePhones,
   };
 
   return {

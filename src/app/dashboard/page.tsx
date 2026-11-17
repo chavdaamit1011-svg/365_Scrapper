@@ -294,67 +294,13 @@ export default function DashboardPage() {
       >
         {/* Sleek Executive Top Header */}
         <Card style={{ padding: '16px 22px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              <div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <h1 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', margin: 0, letterSpacing: '-0.3px' }}>
-                    Autonomous OSINT & Web Intelligence
-                  </h1>
-                  <span
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '5px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      color: '#0369a1',
-                      background: '#e0f2fe',
-                      padding: '2px 8px',
-                      borderRadius: '9999px',
-                      border: '1px solid #bae6fd',
-                    }}
-                  >
-                    <span className="pulse-dot" style={{ width: '6px', height: '6px' }} />
-                    Live Engine
-                  </span>
-                </div>
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, marginTop: '2px' }}>
-                  Domain scope ingestion, certificate recon, deep web crawling & verified contact extraction.
-                </p>
-              </div>
-            </div>
-
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-              <div
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '6px',
-                  fontSize: '12px',
-                  fontWeight: 600,
-                  color: '#15803d',
-                  background: '#f0fdf4',
-                  padding: '6px 12px',
-                  borderRadius: '8px',
-                  border: '1px solid #bbf7d0',
-                }}
-              >
-                <Database size={13} color="#15803d" />
-                <span>MongoDB: the_scraper</span>
-              </div>
-
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={handleSyncAll}
-                isLoading={isLoadingUsers}
-                leftIcon={<RefreshCw size={13} />}
-                title="Sync database, intelligence, and users"
-              >
-                Sync Database
-              </Button>
-            </div>
+          <div>
+            <h1 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-main)', margin: 0, letterSpacing: '-0.3px' }}>
+              Autonomous OSINT & Web Intelligence
+            </h1>
+            <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, marginTop: '2px' }}>
+              Domain scope ingestion, certificate recon, deep web crawling & verified contact extraction.
+            </p>
           </div>
         </Card>
 

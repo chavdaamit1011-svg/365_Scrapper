@@ -621,7 +621,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
         </div>
 
-        {/* Metric 3: Active Target Emails */}
+        {/* Metric 3: Active Target Contacts (Emails & Phones) */}
         <div
           style={{
             display: 'flex',
@@ -650,24 +650,28 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              {stats.isTldZoneActive ? 'Zone Verified Emails' : 'Active Target Emails'}
+              {stats.isTldZoneActive ? 'Zone Verified Contacts' : 'Active Target Contacts'}
             </div>
             <div style={{ fontSize: '15px', fontWeight: 700, color: '#d97706' }}>
               {status === 'RUNNING' && (stats.activeTargetEmails === null || stats.activeTargetEmails === undefined)
                 ? 'Extracting...'
                 : stats.activeTargetEmails !== null && stats.activeTargetEmails !== undefined
-                ? `${stats.activeTargetEmails} Verified`
+                ? (stats.activeTargetPhones && stats.activeTargetPhones > 0
+                    ? `${stats.activeTargetEmails} Emails • ${stats.activeTargetPhones} Phones`
+                    : `${stats.activeTargetEmails} Verified`)
                 : status === 'COMPLETED'
-                ? `${stats.activeTargetEmails ?? 0} Verified`
+                ? (stats.activeTargetPhones && stats.activeTargetPhones > 0
+                    ? `${stats.activeTargetEmails ?? 0} Emails • ${stats.activeTargetPhones} Phones`
+                    : `${stats.activeTargetEmails ?? 0} Verified`)
                 : '-'}
             </div>
             <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '1px' }}>
-              {stats.isTldZoneActive ? `Across ${stats.currentTargetName || 'zone'} domains` : 'Legitimate verified'}
+              {stats.isTldZoneActive ? `Across ${stats.currentTargetName || 'zone'} scope` : 'Verified contact intelligence'}
             </div>
           </div>
         </div>
 
-        {/* Metric 4: Total Database Intelligence */}
+        {/* Metric 4: Active Crawled Pages */}
         <div
           style={{
             display: 'flex',
@@ -696,13 +700,15 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           </div>
           <div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 500 }}>
-              Database Total Intelligence
+              {stats.isTldZoneActive ? 'Zone Crawled Pages' : 'Active Crawled Pages'}
             </div>
             <div style={{ fontSize: '15px', fontWeight: 700, color: '#15803d' }}>
-              {stats.databaseTotalSubdomains ?? stats.subdomainsFound} Subs • {stats.databaseTotalEmails ?? stats.emailsFound} Emails
+              {status === 'RUNNING' || status === 'COMPLETED'
+                ? `${stats.activeTargetPages ?? (stats.activeWorkersList?.[0]?.pagesCrawled || 0)} Pages Crawled`
+                : '-'}
             </div>
             <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '1px' }}>
-              Across {stats.databaseTotalDomains ?? 1} Saved Domains
+              {status === 'RUNNING' ? 'Live HTTP Stream • Depth 1-3' : 'Real-Time Page Crawler'}
             </div>
           </div>
         </div>

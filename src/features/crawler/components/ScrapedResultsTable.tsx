@@ -957,60 +957,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             <h2 style={{ fontSize: '18px', fontWeight: 700, color: 'var(--text-main)', letterSpacing: '-0.3px', margin: 0 }}>
               Structured Domain Intelligence
             </h2>
-            <span
-              style={{
-                fontSize: '11px',
-                fontWeight: 700,
-                padding: '2px 8px',
-                borderRadius: '9999px',
-                background: '#e0f2fe',
-                color: '#0369a1',
-              }}
-            >
-              {activeDatasetGroups.length} Domain{activeDatasetGroups.length === 1 ? '' : 's'} Organized
-            </span>
-            {totalSubdomainsFound > 0 && (
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  padding: '2px 8px',
-                  borderRadius: '9999px',
-                  background: '#f0fdf4',
-                  color: '#15803d',
-                }}
-              >
-                {totalSubdomainsFound} Subdomains
-              </span>
-            )}
-            {totalEmailsFound > 0 && (
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  padding: '2px 8px',
-                  borderRadius: '9999px',
-                  background: '#fef3c7',
-                  color: '#b45309',
-                }}
-              >
-                {totalEmailsFound} Verified Emails
-              </span>
-            )}
-            {isCrawling && (
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: '#0284c7',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}
-              >
-                <span className="pulse-dot" /> Live Ingesting
-              </span>
-            )}
           </div>
           <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', marginTop: '4px', margin: 0 }}>
             Hierarchical breakdown of target domains, verified subdomains, and legitimate emails.
@@ -1441,9 +1387,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                 </th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-muted)', fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
                   Country / Geo
-                </th>
-                <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-muted)', fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Status
                 </th>
                 <th style={{ padding: '12px 16px', fontWeight: 600, color: 'var(--text-muted)', fontSize: '11.5px', textTransform: 'uppercase', letterSpacing: '0.5px', textAlign: 'right' }}>
                   Actions
@@ -2035,26 +1978,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                         </div>
                       </td>
 
-                      {/* Column 5: Status */}
-                      <td style={{ padding: '11px 16px', verticalAlign: 'middle' }}>
-                        <Badge
-                          variant={
-                            isCurrentlyCrawling
-                              ? 'primary'
-                              : isOffline
-                              ? 'danger'
-                              : r.status === 'SSL_ERROR'
-                              ? 'warning'
-                              : (r.status === 'RESOLVED' || hasSubs)
-                              ? 'success'
-                              : 'primary'
-                          }
-                        >
-                          {isCurrentlyCrawling ? 'CRAWLING' : (isOffline ? (r.status || 'OFFLINE') : 'RESOLVED')}
-                        </Badge>
-                      </td>
-
-                      {/* Column 6: Toggle Details & Target Export */}
+                      {/* Column 5: Toggle Details & Target Export */}
                       <td style={{ padding: '11px 16px', textAlign: 'right', verticalAlign: 'middle' }}>
                         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                           <motion.button
@@ -2122,7 +2046,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                       }}
                     >
                       <td
-                        colSpan={6}
+                        colSpan={5}
                         style={{
                           padding: 0,
                           border: 'none',
@@ -2736,12 +2660,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                                   <span>{child.countryCode || 'INT'}</span>
                                                 </div>
 
-                                                {/* 5. Status */}
-                                                <div>
-                                                  <Badge variant={child.status === 'CRAWLING' ? 'primary' : 'success'}>
-                                                    {child.status || 'RESOLVED'}
-                                                  </Badge>
-                                                </div>
 
                                                 {/* 6. Actions: Inspect Pages & Export Single Domain CSV */}
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>

@@ -125,6 +125,8 @@ export interface CrawlerStats {
   activeTargetPhase?: string;
   activeTargetSubdomains?: number | null;
   activeTargetEmails?: number | null;
+  activeTargetPhones?: number | null;
+  activeTargetPages?: number | null;
   databaseTotalDomains?: number;
   databaseTotalSubdomains?: number;
   databaseTotalEmails?: number;
@@ -137,5 +139,6 @@ export interface CrawlerStats {
   activeZoneScannedDomains?: number;
   activeZoneSubdomains?: number;
   activeZoneEmails?: number;
+  activeZonePhones?: number;
 }
 
