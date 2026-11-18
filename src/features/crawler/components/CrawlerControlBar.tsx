@@ -334,21 +334,6 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 </span>
               </>
             )}
-            {status === 'RUNNING' && stats.activeTargetPhase && (
-              <span
-                style={{
-                  fontSize: '11px',
-                  background: '#e0f2fe',
-                  color: '#0369a1',
-                  padding: '2px 8px',
-                  borderRadius: '6px',
-                  fontWeight: 600,
-                  border: '1px solid #bae6fd',
-                }}
-              >
-                {stats.activeTargetPhase}
-              </span>
-            )}
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: 'var(--text-muted)', fontSize: '11.5px' }}>
@@ -382,109 +367,6 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
           />
         </div>
       </div>
-
-      {/* Active Concurrency Pool Workers Grid (Shows every active domain currently crawling) */}
-      {Array.isArray(stats.activeWorkersList) && stats.activeWorkersList.length > 0 && (
-        <div style={{ marginTop: '14px', paddingTop: '14px', borderTop: '1px solid #f1f5f9' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 700, color: '#0369a1', letterSpacing: '0.4px', textTransform: 'uppercase' }}>
-              ⚡ Active Crawling Workers ({stats.activeWorkersList.length}/3 Concurrency Slots)
-            </span>
-            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              Parallel Multi-Domain Engine
-            </span>
-          </div>
-
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-              gap: '10px',
-            }}
-          >
-            {stats.activeWorkersList.map((worker, idx) => (
-              <div
-                key={worker.id}
-                style={{
-                  background: '#f8fafc',
-                  border: '1px solid #bae6fd',
-                  borderRadius: '8px',
-                  padding: '10px 12px',
-                  boxShadow: '0 1px 3px rgba(2, 132, 199, 0.06)',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
-                  <span
-                    style={{
-                      fontSize: '10.5px',
-                      fontWeight: 700,
-                      color: '#0369a1',
-                      background: '#e0f2fe',
-                      padding: '2px 7px',
-                      borderRadius: '4px',
-                      border: '1px solid #bae6fd',
-                    }}
-                  >
-                    Worker #{idx + 1}
-                  </span>
-                  <span style={{ fontSize: '11px', fontWeight: 700, color: '#0284c7' }}>
-                    {worker.progress}%
-                  </span>
-                </div>
-
-                <div
-                  style={{
-                    fontWeight: 700,
-                    fontSize: '13px',
-                    color: 'var(--text-main)',
-                    marginBottom: '4px',
-                    wordBreak: 'break-all',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '6px',
-                  }}
-                >
-                  <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#0284c7', display: 'inline-block' }} />
-                  {worker.domain.startsWith('.') ? `${worker.domain} Zone Scope` : worker.domain}
-                </div>
-
-                {worker.subTarget && (
-                  <div
-                    style={{
-                      fontSize: '11px',
-                      color: '#0369a1',
-                      background: '#e0f2fe',
-                      padding: '2px 7px',
-                      borderRadius: '4px',
-                      marginBottom: '6px',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      fontWeight: 600,
-                      border: '1px solid #bae6fd',
-                    }}
-                  >
-                    <span>⚡ {worker.subTarget}</span>
-                    {typeof worker.subIndex === 'number' && typeof worker.totalSubTargets === 'number' && (
-                      <span style={{ color: '#0284c7', fontWeight: 700 }}>
-                        ({worker.subIndex}/{worker.totalSubTargets})
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#64748b' }}>
-                  <span>🌐 <strong>{worker.subdomainsCount}</strong> Subs</span>
-                  <span>•</span>
-                  <span>✉️ <strong>{worker.emailsCount}</strong> Emails</span>
-                  <span>•</span>
-                  <span>📄 <strong>{worker.pagesCrawled}</strong> Pages</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Extracted Metrics Grid (Domain, Subdomain, Email, Country) */}
       <div

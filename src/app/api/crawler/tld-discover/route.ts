@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
 import { discoverTldRootDomains, normalizeTld } from '@/lib/crawler/tldDiscovery';
 import { connectMongo } from '@/lib/mongodb';
-import { getComprehensiveGovSubdomains } from '@/lib/crawler/govSubdomainsRegistry';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,25 +84,18 @@ export async function POST(req: Request) {
         explicitSet.add('gov.pk');
         explicitSet.add('kingqueen.in');
 
-        // 3. For .in zone, guarantee gov.in and nic.in umbrella documents exist with official subdomains
+        // 3. For .in zone, guarantee gov.in and nic.in umbrella documents exist without injecting mock registries
         if (cleanTld === 'in') {
-          const defaultGovSubdomains = getComprehensiveGovSubdomains();
-          const defaultNicSubdomains = [
-            'ssc.nic.in',
-            'morth.nic.in',
-            'cbse.nic.in',
-            'jeemain.nic.in',
-          ];
-
           await db.collection('scraped_results').updateOne(
             { domain: 'gov.in' },
             {
-              $addToSet: { subdomains: { $each: defaultGovSubdomains } },
               $setOnInsert: {
                 id: 'dom_gov_in',
                 domain: 'gov.in',
                 rootDomain: 'gov.in',
                 subdomain: 'gov.in',
+                subdomains: [],
+                subdomainCount: 0,
                 email: 'support@gov.in',
                 emails: ['support@gov.in'],
                 verifiedEmails: ['support@gov.in'],
@@ -119,12 +111,11 @@ export async function POST(req: Request) {
                 tldZone: '.in',
                 status: 'RESOLVED',
                 discoveredAt: now,
+                summary: 'Official Government of India central portal network and digital services infrastructure.',
               },
               $set: {
                 tldZone: '.in',
                 isExplicitTarget: false,
-                subdomainCount: defaultGovSubdomains.length,
-                summary: 'Official Government of India central portal network and digital services infrastructure.',
                 updatedAt: new Date(),
               },
             },
@@ -134,12 +125,13 @@ export async function POST(req: Request) {
           await db.collection('scraped_results').updateOne(
             { domain: 'nic.in' },
             {
-              $addToSet: { subdomains: { $each: defaultNicSubdomains } },
               $setOnInsert: {
                 id: 'dom_nic_in',
                 domain: 'nic.in',
                 rootDomain: 'nic.in',
                 subdomain: 'nic.in',
+                subdomains: [],
+                subdomainCount: 0,
                 email: 'support@nic.in',
                 emails: ['support@nic.in'],
                 verifiedEmails: ['support@nic.in'],
@@ -155,11 +147,11 @@ export async function POST(req: Request) {
                 tldZone: '.in',
                 status: 'RESOLVED',
                 discoveredAt: now,
+                summary: 'National Informatics Centre (NIC) e-governance and public digital services network.',
               },
               $set: {
                 tldZone: '.in',
                 isExplicitTarget: false,
-                summary: 'National Informatics Centre (NIC) e-governance and public digital services network.',
                 updatedAt: new Date(),
               },
             },

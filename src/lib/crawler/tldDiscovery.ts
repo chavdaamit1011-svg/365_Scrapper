@@ -14,7 +14,6 @@ import dns from 'dns';
 import { extractRootDomain } from './subdomainRecon';
 import { MULTI_PART_TLDS } from '@/features/targets/utils/domainValidator';
 import { connectMongo } from '../mongodb';
-import { getComprehensiveGovSubdomains } from './govSubdomainsRegistry';
 
 const dnsResolver = new dns.promises.Resolver();
 try {
@@ -283,7 +282,14 @@ const TLD_SEED_REGISTRY: Record<string, string[]> = {
     'surakshaguards.in',
     'kingqueen.in',
   ],
-  'gov.in': getComprehensiveGovSubdomains(),
+  'gov.in': [
+    'india.gov.in',
+    'digitalindia.gov.in',
+    'mygov.in',
+    'uidai.gov.in',
+    'cowin.gov.in',
+    'pmindia.gov.in',
+  ],
   'nic.in': [
     'ssc.nic.in',
     'morth.nic.in',

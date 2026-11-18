@@ -208,14 +208,29 @@ export function useCrawlerController(
       totalPhs = zPhs;
       totalPgs = zPgs;
     } else {
-      totalSubs = workers.reduce((acc, w) => acc + (w.subdomainsCount || 0), 0);
-      totalEms = workers.reduce((acc, w) => acc + (w.emailsCount || 0), 0);
-      totalPgs = workers.reduce((acc, w) => acc + (w.pagesCrawled || 0), 0);
+      // Group by target domain to avoid tripling metrics across parallel pipeline workers
+      const domainMetrics = new Map<string, { subs: number; ems: number; pgs: number; phs: number }>();
+      for (const w of workers) {
+        const dom = (w.target.domain || '').toLowerCase().trim();
+        const existing = domainMetrics.get(dom) || { subs: 0, ems: 0, pgs: 0, phs: 0 };
+        domainMetrics.set(dom, {
+          subs: Math.max(existing.subs, w.subdomainsCount || 0),
+          ems: Math.max(existing.ems, w.emailsCount || 0),
+          pgs: Math.max(existing.pgs, w.pagesCrawled || 0),
+          phs: 0,
+        });
+      }
+
+      totalSubs = Array.from(domainMetrics.values()).reduce((acc, m) => acc + m.subs, 0);
+      totalEms = Array.from(domainMetrics.values()).reduce((acc, m) => acc + m.ems, 0);
+      totalPgs = Array.from(domainMetrics.values()).reduce((acc, m) => acc + m.pgs, 0);
 
       const currentDoc = scrapedResultsRef.current.find((r) => r.domain.toLowerCase() === primaryDomain.toLowerCase());
       if (currentDoc) {
         if (totalSubs === 0 && currentDoc.subdomains) {
           totalSubs = currentDoc.subdomains.length;
+        } else if (currentDoc.subdomainCount && currentDoc.subdomainCount > totalSubs) {
+          totalSubs = currentDoc.subdomainCount;
         }
         if (totalEms === 0 && currentDoc.emails) {
           totalEms = currentDoc.emails.length;
@@ -265,13 +280,33 @@ export function useCrawlerController(
     const w2Id = `${target.id}_worker2`;
     const w3Id = `${target.id}_worker3`;
 
+    // Retain baseline intelligence from previous cycle or MongoDB so worker slot never blinks to 0
+    const existingDoc = scrapedResultsRef.current.find(
+      (r) => r.domain.toLowerCase() === target.domain.toLowerCase()
+    );
+    const existingW1 = activeWorkersRef.current.get(w1Id);
+    const baselineSubs = Math.max(
+      existingDoc?.subdomains?.length || 0,
+      existingDoc?.subdomainCount || 0,
+      existingW1?.subdomainsCount || 0
+    );
+    const baselinePages = Math.max(
+      existingDoc?.pagesCrawled || 0,
+      existingDoc?.crawledPages?.length || 0,
+      existingW1?.pagesCrawled || 0
+    );
+    const baselineEmails = Math.max(
+      existingDoc?.emails?.length || 0,
+      existingW1?.emailsCount || 0
+    );
+
     // 3 Specialized Pipeline Workers: Scraper -> Deduplicator/Filter -> Live Dashboard Streamer
     activeWorkersRef.current.set(w1Id, {
       target,
       progress: 10,
-      pagesCrawled: 0,
-      subdomainsCount: 0,
-      emailsCount: 0,
+      pagesCrawled: baselinePages,
+      subdomainsCount: baselineSubs,
+      emailsCount: baselineEmails,
       subTarget: 'Active Discovery & Web Crawler',
       phase: `⚡ [Worker #1: Scraper] Crawling ${target.domain} & live web pages (Cycle #${cycle})`,
     });
@@ -279,9 +314,9 @@ export function useCrawlerController(
     activeWorkersRef.current.set(w2Id, {
       target,
       progress: 10,
-      pagesCrawled: 0,
-      subdomainsCount: 0,
-      emailsCount: 0,
+      pagesCrawled: baselinePages,
+      subdomainsCount: baselineSubs,
+      emailsCount: baselineEmails,
       subTarget: 'Deduplication & Noise Filter',
       phase: `🛡️ [Worker #2: Filter] Deduplicating & Normalizing • Cycle #${cycle}`,
     });
@@ -289,9 +324,9 @@ export function useCrawlerController(
     activeWorkersRef.current.set(w3Id, {
       target,
       progress: 10,
-      pagesCrawled: 0,
-      subdomainsCount: 0,
-      emailsCount: 0,
+      pagesCrawled: baselinePages,
+      subdomainsCount: baselineSubs,
+      emailsCount: baselineEmails,
       subTarget: 'Live Dashboard Streamer',
       phase: `📡 [Worker #3: Syncer] Live telemetry streaming • Cycle #${cycle} active`,
     });
@@ -370,9 +405,9 @@ export function useCrawlerController(
                 isDone = true;
               }
 
-              const pagesDone = j.pagesCrawled || 0;
-              const subsFound = j.subdomainsCount || 0;
-              const emailsFound = j.emailsCount || 0;
+              const pagesDone = Math.max(baselinePages, j.pagesCrawled || 0);
+              const subsFound = Math.max(baselineSubs, j.subdomainsCount || 0);
+              const emailsFound = Math.max(baselineEmails, j.emailsCount || 0);
 
               const w1 = activeWorkersRef.current.get(w1Id);
               if (w1) {

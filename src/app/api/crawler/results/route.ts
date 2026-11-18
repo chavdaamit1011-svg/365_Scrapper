@@ -6,7 +6,6 @@ import { redisQueue } from '@/lib/redisQueue';
 import { DorkingPersistenceService } from '@/modules/dorking/services/persistence';
 import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
 import { classifySite } from '@/lib/crawler/siteClassifier';
-import { getComprehensiveGovSubdomains } from '@/lib/crawler/govSubdomainsRegistry';
 
 export const dynamic = 'force-dynamic';
 
@@ -27,54 +26,9 @@ export async function GET() {
       .lean();
 
     // Auto-consolidate any *.gov.in and *.nic.in child departments under their root umbrella (gov.in / nic.in)
-    // Loads the authentic 2,800+ Indian Government and Department namespaces
-    const comprehensiveGovSubs = getComprehensiveGovSubdomains();
-    const defaultNicSubdomains = [
-      'ssc.nic.in',
-      'morth.nic.in',
-      'cbse.nic.in',
-      'jeemain.nic.in',
-      'upsc.nic.in',
-      'supremecourtofindia.nic.in',
-      'indiannavy.nic.in',
-      'indianairforce.nic.in',
-      'nrega.nic.in',
-      'eproc.nic.in',
-      'davp.nic.in',
-      'publicationsdivision.nic.in',
-      'consumeraffairs.nic.in',
-      'fert.nic.in',
-      'chemicals.nic.in',
-      'petroleum.nic.in',
-      'coal.nic.in',
-    ];
-
-    const govSubsToMerge: string[] = [...comprehensiveGovSubs];
-    const nicSubsToMerge: string[] = [...defaultNicSubdomains];
-
-    // Cross-query master_subdomains collection in MongoDB to aggregate historical discovered subdomains
-    try {
-      const conn = await connectMongo();
-      if (conn?.connection?.db) {
-        const db = conn.connection.db;
-        const dbGovSubs = await db.collection('master_subdomains').find(
-          { subdomain: { $regex: '\\.gov\\.in$' } },
-          { projection: { subdomain: 1 } }
-        ).limit(5000).toArray();
-        for (const s of dbGovSubs) {
-          if (s.subdomain) govSubsToMerge.push(String(s.subdomain).toLowerCase().trim());
-        }
-
-        const dbNicSubs = await db.collection('master_subdomains').find(
-          { subdomain: { $regex: '\\.nic\\.in$' } },
-          { projection: { subdomain: 1 } }
-        ).limit(2000).toArray();
-        for (const s of dbNicSubs) {
-          if (s.subdomain) nicSubsToMerge.push(String(s.subdomain).toLowerCase().trim());
-        }
-      }
-    } catch {}
-
+    // Only real discovered subdomains are retained - strictly no hardcoded mock injections
+    const govSubsToMerge: string[] = [];
+    const nicSubsToMerge: string[] = [];
     const orphanGovIdsToDelete: any[] = [];
 
     for (const d of rawDocs) {

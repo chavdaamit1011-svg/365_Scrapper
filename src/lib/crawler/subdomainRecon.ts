@@ -13,7 +13,7 @@
 import dns from 'dns';
 import * as tls from 'tls';
 import { connectMongo } from '../mongodb';
-import { getComprehensiveGovSubdomains, getGovSubdomainsBatch } from './govSubdomainsRegistry';
+import { getGovSubdomainsBatch } from './govSubdomainsRegistry';
 
 const dnsResolver = new dns.promises.Resolver();
 try {
@@ -463,12 +463,13 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     } catch {}
   };
 
-  // 10. Vector: Certificate Transparency (crt.sh) with %25 wildcard encoding
+  // 10. Vector: Certificate Transparency (crt.sh) with Progressive Wave per Cycle
   const fetchCrtSh = async () => {
+    // Slices certificates progressively per cycle (e.g. 150 -> 350 -> 550 -> 750...)
+    const crtLimit = Math.min(3000, 150 + (cycle - 1) * 200);
     const urls = [
       `https://crt.sh/?q=%25.${encodeURIComponent(cleanRoot)}&output=json`,
       `https://crt.sh/?q=${encodeURIComponent(cleanRoot)}&output=json`,
-      `https://crt.sh/?q=%.${encodeURIComponent(cleanRoot)}&output=json`,
     ];
 
     await Promise.allSettled(
@@ -476,12 +477,13 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
         try {
           const res = await fetch(url, {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            signal: AbortSignal.timeout(22000),
+            signal: AbortSignal.timeout(18000),
           });
           if (res.ok) {
             const data = await res.json();
             if (Array.isArray(data)) {
-              for (const item of data) {
+              const sliced = data.slice(0, crtLimit);
+              for (const item of sliced) {
                 const rawNames = item.name_value || '';
                 for (let sub of rawNames.split('\n')) {
                   sub = sub.trim().toLowerCase();

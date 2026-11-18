@@ -217,7 +217,7 @@ export async function crawlDomain(
     const conn = await connectMongo();
     if (conn?.connection?.db) {
       await conn.connection.db.collection('scraped_results').updateOne(
-        { id: checkpointRecord.id },
+        { domain: rootDomain },
         { $set: checkpointRecord, $setOnInsert: { createdAt: new Date().toISOString() } },
         { upsert: true }
       );
