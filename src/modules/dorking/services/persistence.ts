@@ -386,7 +386,6 @@ export class DorkingPersistenceService {
    */
   static async clearAll(): Promise<void> {
     this.fallbackData = { jobs: [], records: [] };
-    this.saveFallback();
     try {
       if (fs.existsSync(DORKING_STORAGE_FILE)) {
         fs.unlinkSync(DORKING_STORAGE_FILE);

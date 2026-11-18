@@ -112,44 +112,47 @@ export async function crawlDomain(
     }
   };
 
-  // Pre-load existing MongoDB intelligence across continuous cycles
-  // This guarantees that when advancing from Cycle 2 -> Cycle 3, existing emails/phones/subdomains
-  // NEVER disappear or flicker in the dashboard!
+  // Pre-load existing MongoDB intelligence ONLY when cycle > 1 (continuous 24/7 mode advancing)
+  // On Cycle 1 (a fresh target crawl), NEVER pre-load old pages or subdomains so the crawl is 100% clean and live!
   let existingRecord: ScrapedDomainRecord | null = null;
-  try {
-    const conn = await connectMongo();
-    if (conn?.connection?.db) {
-      const existingDoc = await conn.connection.db.collection('scraped_results').findOne({
-        $or: [{ id: generateEntityId('domain', rootDomain) }, { rootDomain }, { domain: rootDomain }],
-      });
-      if (existingDoc) {
-        existingRecord = existingDoc as unknown as ScrapedDomainRecord;
-        if (Array.isArray(existingRecord.verifiedEmails)) {
-          for (const em of existingRecord.verifiedEmails) {
-            if (em?.email) allEmails.set(em.email.toLowerCase(), em);
+  const currentCycleNum = options.cycle || 1;
+
+  if (currentCycleNum > 1) {
+    try {
+      const conn = await connectMongo();
+      if (conn?.connection?.db) {
+        const existingDoc = await conn.connection.db.collection('scraped_results').findOne({
+          $or: [{ id: generateEntityId('domain', rootDomain) }, { rootDomain }, { domain: rootDomain }],
+        });
+        if (existingDoc) {
+          existingRecord = existingDoc as unknown as ScrapedDomainRecord;
+          if (Array.isArray(existingRecord.verifiedEmails)) {
+            for (const em of existingRecord.verifiedEmails) {
+              if (em?.email) allEmails.set(em.email.toLowerCase(), em);
+            }
           }
-        }
-        if (Array.isArray(existingRecord.scrapedPhones)) {
-          for (const ph of existingRecord.scrapedPhones) {
-            if (ph?.phone) allPhones.set(ph.phone, ph);
+          if (Array.isArray(existingRecord.scrapedPhones)) {
+            for (const ph of existingRecord.scrapedPhones) {
+              if (ph?.phone) allPhones.set(ph.phone, ph);
+            }
           }
-        }
-        if (Array.isArray(existingRecord.subdomains)) {
-          for (const sub of existingRecord.subdomains) {
-            addSafeSubdomain(sub);
+          if (Array.isArray(existingRecord.subdomains)) {
+            for (const sub of existingRecord.subdomains) {
+              addSafeSubdomain(sub);
+            }
           }
-        }
-        if (Array.isArray(existingRecord.crawledPages)) {
-          for (const pg of existingRecord.crawledPages) {
-            if (pg?.url) {
-              visitedRecords.push(pg);
+          if (Array.isArray(existingRecord.crawledPages)) {
+            for (const pg of existingRecord.crawledPages) {
+              if (pg?.url) {
+                visitedRecords.push(pg);
+              }
             }
           }
         }
       }
+    } catch (err) {
+      console.warn('[CrawlerEngine] Could not pre-load existing record:', err);
     }
-  } catch (err) {
-    console.warn('[CrawlerEngine] Could not pre-load existing record:', err);
   }
 
   // Step 1: Subdomain Reconnaissance & Real Search Dorking

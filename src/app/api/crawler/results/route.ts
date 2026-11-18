@@ -4,6 +4,7 @@ import path from 'path';
 import { connectMongo, MongoScrapedResultModel } from '@/lib/mongodb';
 import { redisQueue } from '@/lib/redisQueue';
 import { DorkingPersistenceService } from '@/modules/dorking/services/persistence';
+import { DorkingDiscoveryEngine } from '@/modules/dorking/engine/discoveryEngine';
 import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
 import { classifySite } from '@/lib/crawler/siteClassifier';
 
@@ -308,36 +309,41 @@ export async function DELETE() {
   let mongoConnected = false;
 
   try {
-    // 1. Wipe intelligence collections in MongoDB if connected
+    // 0. Stop all running dorking jobs in memory
+    try {
+      await DorkingDiscoveryEngine.getInstance().stopAllJobs();
+    } catch (e) {
+      console.warn('[API] Failed to stop dorking jobs:', e);
+    }
+
+    // 1. Authoritative purge of MongoDB collections
     try {
       const mongoose = await connectMongo();
-      if (mongoose && mongoose.connection.readyState === 1 && mongoose.connection.db) {
+      if (mongoose) {
         mongoConnected = true;
-        const db = mongoose.connection.db;
-        const collections = [
-          'scraped_results',
-          'raw_crawl_data',
-          'master_domains',
-          'master_subdomains',
-          'master_emails',
-          'data_changes',
-          'dorking_jobs',
-          'dorking_results',
-          'crawl_jobs',
-          'targets',
-          'domains',
-          'subdomains',
-          'target_scopes',
-        ];
 
-        for (const collName of collections) {
-          try {
-            const res = await db.collection(collName).deleteMany({});
-            if (collName === 'scraped_results') {
-              deletedCount += res.deletedCount || 0;
+        // Primary: Purge scraped_results collection via Mongoose Model
+        try {
+          const modelRes = await MongoScrapedResultModel.deleteMany({});
+          deletedCount += modelRes.deletedCount || 0;
+        } catch (mErr) {
+          console.warn('[API] MongoScrapedResultModel.deleteMany error:', mErr);
+        }
+
+        // Secondary: Direct purge of all database collections (except users authentication and system)
+        const db = mongoose.connection?.db || (mongoose.connection as any)?.client?.db();
+        if (db) {
+          const allCollections = await db.listCollections().toArray();
+          for (const col of allCollections) {
+            if (col.name === 'users' || col.name.startsWith('system.')) continue;
+            try {
+              const res = await db.collection(col.name).deleteMany({});
+              if (col.name === 'scraped_results' && deletedCount === 0) {
+                deletedCount += res.deletedCount || 0;
+              }
+            } catch (colErr) {
+              console.warn(`[API] Failed to clear collection ${col.name}:`, colErr);
             }
-          } catch (e) {
-            console.warn(`[API] Failed to clear collection ${collName}:`, e);
           }
         }
       }

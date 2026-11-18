@@ -280,25 +280,26 @@ export function useCrawlerController(
     const w2Id = `${target.id}_worker2`;
     const w3Id = `${target.id}_worker3`;
 
-    // Retain baseline intelligence from previous cycle or MongoDB so worker slot never blinks to 0
+    // Retain baseline intelligence across continuous cycles (cycle > 1) so worker slot never blinks to 0.
+    // On Cycle 1 (a fresh target crawl), strictly start at 0 so the crawl progress and pages are 100% genuine!
     const existingDoc = scrapedResultsRef.current.find(
       (r) => r.domain.toLowerCase() === target.domain.toLowerCase()
     );
     const existingW1 = activeWorkersRef.current.get(w1Id);
-    const baselineSubs = Math.max(
+    const baselineSubs = cycle > 1 ? Math.max(
       existingDoc?.subdomains?.length || 0,
       existingDoc?.subdomainCount || 0,
       existingW1?.subdomainsCount || 0
-    );
-    const baselinePages = Math.max(
+    ) : 0;
+    const baselinePages = cycle > 1 ? Math.max(
       existingDoc?.pagesCrawled || 0,
       existingDoc?.crawledPages?.length || 0,
       existingW1?.pagesCrawled || 0
-    );
-    const baselineEmails = Math.max(
+    ) : 0;
+    const baselineEmails = cycle > 1 ? Math.max(
       existingDoc?.emails?.length || 0,
       existingW1?.emailsCount || 0
-    );
+    ) : 0;
 
     // 3 Specialized Pipeline Workers: Scraper -> Deduplicator/Filter -> Live Dashboard Streamer
     activeWorkersRef.current.set(w1Id, {
@@ -993,17 +994,12 @@ export function useCrawlerController(
     activeWorkersRef.current.clear();
     targetsRef.current = [];
 
-    // 2. Clear all browser localStorage and sessionStorage caches
+    // 2. Clear all browser localStorage and sessionStorage caches (preserving only operator credentials)
     try {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const k = localStorage.key(i);
-        if (k && (k.startsWith('the_scrapper_') || k.startsWith('scrapper_'))) {
-          keysToRemove.push(k);
-        }
-      }
-      for (const k of keysToRemove) {
-        localStorage.removeItem(k);
+      const authUser = localStorage.getItem('the_screpper_auth_user');
+      localStorage.clear();
+      if (authUser) {
+        localStorage.setItem('the_screpper_auth_user', authUser);
       }
       sessionStorage.clear();
     } catch (e) {}

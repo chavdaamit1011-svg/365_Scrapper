@@ -497,9 +497,9 @@ export default function DashboardPage() {
                     activeTargetDomain={crawler.stats.currentTargetName || undefined}
                     activeWorkers={crawler.stats.activeWorkersList}
                     activeCycle={crawler.cycleCount}
-                    onClearResults={() => {
+                    onClearResults={async () => {
                       setTargets([]);
-                      crawler.clearResults();
+                      await crawler.clearResults();
                     }}
                   />
                 </motion.div>

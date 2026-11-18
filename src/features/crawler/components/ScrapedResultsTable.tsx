@@ -751,17 +751,12 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
     try {
       setIsClearing(true);
       setExpandedDomainId(null);
-      // Immediately purge all browser local storage and session caches
+      // Immediately purge all browser local storage and session caches (preserving only operator credentials)
       try {
-        const keysToRemove: string[] = [];
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i);
-          if (k && (k.startsWith('the_scrapper_') || k.startsWith('scrapper_'))) {
-            keysToRemove.push(k);
-          }
-        }
-        for (const k of keysToRemove) {
-          localStorage.removeItem(k);
+        const authUser = localStorage.getItem('the_screpper_auth_user');
+        localStorage.clear();
+        if (authUser) {
+          localStorage.setItem('the_screpper_auth_user', authUser);
         }
         sessionStorage.clear();
       } catch (e) {}
@@ -770,7 +765,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       const data = await res.json();
       if (data.success) {
         if (onClearResults) {
-          onClearResults();
+          await onClearResults();
         }
         window.location.reload();
       } else {

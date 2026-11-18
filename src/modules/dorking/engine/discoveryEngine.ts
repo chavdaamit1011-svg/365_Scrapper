@@ -286,6 +286,17 @@ export class DorkingDiscoveryEngine {
   }
 
   /**
+   * Stop all ongoing jobs and clear memory signals
+   */
+  public async stopAllJobs(): Promise<void> {
+    for (const [id] of this.activeJobs) {
+      this.jobControlSignals.set(id, 'STOPPED');
+    }
+    this.activeJobs.clear();
+    this.jobControlSignals.clear();
+  }
+
+  /**
    * Retry failed queries for a job
    */
   public async retryFailedQueries(jobId: string): Promise<DorkingJob | null> {

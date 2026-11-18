@@ -640,6 +640,9 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
 
   // 11. Vector: MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
   const fetchMongo = async () => {
+    // Only cross-reference previously observed subdomains when advancing continuous cycles (cycle > 1)
+    // On Cycle 1, strictly discover subdomains live from online OSINT and live page crawling!
+    if (cycle <= 1) return;
     try {
       const conn = await connectMongo();
       if (!conn?.connection?.db) return;
