@@ -1,24 +1,9 @@
 /**
  * Multi-Source High-Speed Subdomain Enumeration & Real Search Dorking Engine
- * Features:
- * - Direct Search Engine Dorking (DuckDuckGo HTML, Yahoo Search)
- * - TLS / SSL Certificate SANs Extraction (Immediate port 443 handshake)
- * - Passive Certificate Transparency (crt.sh, HackerTarget, RapidDNS, ThreatMiner)
- * - Historical & Open Web Intelligence (Archive.org CDX, URLScan.io)
- * - Active In-Page Subdomain Harvester (Crawls landing page HTML & assets)
- * - Concurrent High-Speed DNS Probing (450+ Common & Enterprise prefixes)
- * - Persistent MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
+ * 100% Dynamic - Zero Static Wordlists or Hardcoded Files
  */
 
-import dns from 'dns';
-import * as tls from 'tls';
 import { connectMongo } from '../mongodb';
-import { getGovSubdomainsBatch } from './govSubdomainsRegistry';
-
-const dnsResolver = new dns.promises.Resolver();
-try {
-  dnsResolver.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4', '1.0.0.1']);
-} catch {}
 
 const MULTI_PART_TLDS = new Set([
   'gov.in', 'nic.in', 'ac.in', 'edu.in', 'res.in', 'mil.in', 'net.in', 'org.in', 'co.in',
@@ -182,12 +167,6 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     }
   };
 
-  // For gov.in, inject authentic progressive batches per cycle
-  if (cleanRoot === 'gov.in') {
-    const govSubs = getGovSubdomainsBatch(cycle);
-    for (const s of govSubs) addSub(s);
-  }
-
   // 1. Vector: Real DuckDuckGo Search Dorking (site:rootDomain)
   const fetchDuckDuckGoDorks = async () => {
     try {
@@ -293,54 +272,6 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
         }
       }
     } catch {}
-  };
-
-  // 3. Vector: Direct TLS/SSL Certificate SANs Extraction (Port 443 Handshake)
-  const extractTlsSans = async () => {
-    const targets = [cleanRoot, `www.${cleanRoot}`, `mail.${cleanRoot}`, `portal.${cleanRoot}`, `api.${cleanRoot}`];
-    await Promise.allSettled(
-      targets.map(
-        (targetHost) =>
-          new Promise<void>((resolve) => {
-            try {
-              const socket = tls.connect(
-                443,
-                targetHost,
-                { servername: targetHost, rejectUnauthorized: false },
-                () => {
-                  try {
-                    const cert = socket.getPeerCertificate(true);
-                    if (cert && cert.subjectaltname) {
-                      const sans = cert.subjectaltname.split(',');
-                      for (let item of sans) {
-                        item = item.trim();
-                        if (item.startsWith('DNS:')) item = item.slice(4);
-                        if (item.startsWith('*.')) item = item.slice(2);
-                        if (item.startsWith('*')) item = item.slice(1);
-                        addSub(item);
-                      }
-                    }
-                  } catch {}
-                  socket.destroy();
-                  resolve();
-                }
-              );
-
-              socket.setTimeout(3500, () => {
-                socket.destroy();
-                resolve();
-              });
-
-              socket.on('error', () => {
-                socket.destroy();
-                resolve();
-              });
-            } catch {
-              resolve();
-            }
-          })
-      )
-    );
   };
 
   // 5. Vector: RapidDNS Subdomain Database
@@ -558,86 +489,6 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     );
   };
 
-  // 13. Vector: Active Concurrent Anycast DNS Dictionary Probing (600+ Prefixes)
-  const probeDnsDictionary = async () => {
-    const candidatePrefixes = [
-      // Standard Infrastructure, Web, and Auth
-      'www', 'mail', 'webmail', 'email', 'portal', 'admin', 'login', 'auth', 'sso',
-      'secure', 'api', 'app', 'apps', 'dashboard', 'dev', 'developer', 'developers',
-      'beta', 'stage', 'staging', 'test', 'demo', 'm', 'mobile', 'cdn', 'static', 'media',
-      'assets', 'cloud', 'vpn', 'remote', 'gateway', 'connect', 'direct', 'support', 'help',
-      'services', 'service', 'pay', 'epay', 'payment', 'payments', 'billing', 'shop', 'store',
-      'cart', 'checkout', 'status', 'monitor', 'ns1', 'ns2', 'ns3', 'ns4', 'dns1', 'dns2',
-      'mx1', 'mx2', 'ftp', 'sftp', 'docs', 'documentation', 'files', 'git', 'gitlab', 'github',
-      'hub', 'jira', 'confluence', 'jenkins', 'ci', 'cd', 'internal', 'corp', 'corporate',
-      'office', 'live', 'prod', 'production', 'qa', 'uat', 'review', 'sandbox', 'stage-api',
-      'dev-api', 'v1', 'v2', 'ws', 'socket', 'graphql', 'identity', 'id', 'accounts', 'user',
-      'users', 'client', 'clients', 'customer', 'customers', 'partners', 'partner', 'affiliate',
-      'affiliates', 'investors', 'news', 'blog', 'blogs', 'forum', 'community', 'crm', 'erp',
-      'hr', 'careers', 'jobs', 'team', 'staff', 'member', 'members', 'download', 'downloads',
-      'register', 'signup', 'signin', 'account', 'security', 'cpanel', 'whm', 'webdisk',
-      'autodiscover', 'autoconfig', 'search', 'chat', 'meet', 'video', 'db', 'database', 'sql',
-      'redis', 'cache', 'proxy', 'edge', 'tracking', 'track', 'order', 'orders', 'delivery',
-      'my', 'home', 'start', 'main', 'web',
-      // National Ministries, Departments & Bodies
-      'india', 'mygov', 'uidai', 'gst', 'epfindia', 'epfo', 'nic', 'rbi', 'upsc', 'ssc', 'cbse',
-      'irctc', 'nvsp', 'parivahan', 'incometax', 'incometaxindia', 'mca', 'ayush', 'cowin', 'digilocker',
-      'mea', 'mha', 'finmin', 'mof', 'isro', 'drdo', 'railnet', 'indiapost', 'sebi', 'cbic',
-      'icegate', 'gem', 'esic', 'nhp', 'pmindia', 'presidentofindia', 'sansad', 'eci', 'dgft',
-      'ncs', 'samarth', 'swayam', 'ndl', 'aiims', 'ignou', 'ugc', 'aicte', 'nta', 'bis',
-      'trai', 'fssai', 'ibbi', 'cpcb', 'pmkisan', 'pmay', 'mgnrega', 'cybercrime', 'pib', 'davp',
-      'sarathi', 'vahan', 'aadhar', 'echallan', 'scholarship', 'edistrict', 'eprocure', 'cppp',
-      'tenders', 'tender', 'recruitment', 'exam', 'results', 'result', 'admitcard', 'parliament',
-      'supremecourt', 'highcourt', 'cbi', 'nia', 'crpf', 'bsf', 'cisf', 'defence', 'navy', 'airforce',
-      'army', 'nha', 'abdm', 'pmjay', 'jaljeevanmission', 'swachhbharat', 'agricoop', 'enam',
-      'goidirectory', 'cpgrams', 'pgportal', 'rti', 'darpg', 'eproc', 'jeemain', 'neet',
-      // State Governments & Regional Portals (Gujarat & All Indian States)
-      'gujarat', 'digitalgujarat', 'ceogujarat', 'maharashtra', 'aaplesarkar', 'karnataka', 'sevasindhu',
-      'delhi', 'kerala', 'tamilnadu', 'tnesevai', 'telangana', 'meeseva', 'andhra', 'rajasthan',
-      'up', 'mp', 'punjab', 'haryana', 'bihar', 'odisha', 'bengal', 'wb', 'assam', 'jharkhand',
-      'chhattisgarh', 'goa', 'jk', 'ladakh', 'hp', 'uttarakhand', 'tripura', 'manipur', 'meghalaya',
-      'mizoram', 'nagaland', 'sikkim', 'puducherry', 'chandigarh',
-      // Regional Department & Municipal Subdomains (Gujarat Focus)
-      'digital', 'ceo', 'revenue', 'police', 'education', 'health', 'gad', 'finance', 'forest',
-      'sports', 'transport', 'labour', 'urban', 'rural', 'agri', 'energy', 'tourism', 'it', 'dst',
-      'gmdc', 'gidc', 'gsrtc', 'gwssb', 'ssnl', 'gseb', 'gswan', 'collector', 'panchayat',
-      'court', 'districts', 'sp', 'rto', 'cyber', 'vmc', 'smc', 'amc', 'rmc',
-      'bmc', 'jmc', 'gpcb', 'getco', 'gsecl', 'ugvcl', 'mgvcl', 'pgvcl', 'dgvcl', 'guvnl',
-      'anyror', 'garvi', 'jantri', 'ikhedut', 'kuarbaishala', 'landrecords', 'tribal', 'diragri',
-      // Additional Government, Education & Public Sector Portals
-      'ahmedabad', 'surat', 'vadodara', 'rajkot', 'bhavnagar', 'jamnagar', 'junagadh', 'gandhinagar',
-      'iim', 'iit', 'nit', 'iiit', 'nift', 'nirma', 'gtu', 'vnsgu', 'msubaroda', 'hngu', 'spuvvn', 'sauuni',
-      'passport', 'passports', 'visa', 'evisa', 'immigration', 'customs', 'revenue', 'tax', 'incometax',
-      'policerecruitment', 'policegov', 'forestgov', 'agrigov', 'healthgov', 'edugov', 'transportgov',
-      'tendergov', 'eprocurement', 'etender', 'eauction', 'smartcity', 'corporation', 'nagarpalika',
-      'discom', 'energygov', 'solar', 'wind', 'water', 'jal', 'jalshakti', 'swachh', 'krishi', 'kisan'
-    ];
-
-    // Progressive DNS dictionary probing per cycle (avoids overwhelming, discovers new subdomains each cycle)
-    const startIdx = cycle === 1 ? 0 : cycle === 2 ? 75 : cycle === 3 ? 175 : 325;
-    const endIdx = cycle === 1 ? 75 : cycle === 2 ? 175 : cycle === 3 ? 325 : candidatePrefixes.length;
-    const cycleCandidates = candidatePrefixes.slice(startIdx, endIdx);
-
-    // Concurrently resolve in high-speed batches with Anycast DNS and non-blocking timeout
-    const batchSize = 50;
-    for (let i = 0; i < cycleCandidates.length; i += batchSize) {
-      const batch = cycleCandidates.slice(i, i + batchSize);
-      await Promise.allSettled(
-        batch.map(async (prefix) => {
-          const candidate = `${prefix}.${cleanRoot}`;
-          try {
-            await Promise.race([
-              dnsResolver.resolve4(candidate),
-              dnsResolver.resolveCname(candidate),
-              new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 1500)),
-            ]);
-            addSub(candidate);
-          } catch {}
-        })
-      );
-    }
-  };
-
   // 11. Vector: MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
   const fetchMongo = async () => {
     // Only cross-reference previously observed subdomains when advancing continuous cycles (cycle > 1)
@@ -681,13 +532,12 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     } catch {}
   };
 
-  // Run all 16 discovery vectors concurrently!
+  // Run all discovery vectors concurrently (100% Dynamic Online OSINT & Crawling)
   await Promise.allSettled([
     fetchDuckDuckGoDorks(),
     fetchYahooDorks(),
     fetchBingDorks(),
     fetchUrlScan(),
-    extractTlsSans(),
     fetchCertSpotter(),
     fetchAlienVault(),
     fetchAnubis(),
@@ -697,7 +547,6 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     fetchCrtSh(),
     fetchArchiveOrg(),
     fetchInPageSubdomains(),
-    probeDnsDictionary(),
     fetchMongo(),
   ]);
 

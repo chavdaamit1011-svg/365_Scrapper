@@ -34,7 +34,7 @@ export async function GET() {
 
     for (const d of rawDocs) {
       const dom = (d.domain || '').toLowerCase().trim();
-      const isExplicit = Boolean(d.isExplicitTarget) || dom === 'surakshaguards.in' || dom === 'gov.pk' || dom === 'kingqueen.in';
+      const isExplicit = Boolean(d.isExplicitTarget);
       if (!isExplicit) {
         if (dom !== 'gov.in' && dom.endsWith('.gov.in')) {
           orphanGovIdsToDelete.push(d._id);
@@ -160,11 +160,7 @@ export async function GET() {
           : (isOfflineStatus ? '⚠️' : fallbackIntel.categoryIcon);
 
       // Identify if this domain was explicitly targeted as its own standalone scrape
-      const isExplicitTarget =
-        Boolean(d.isExplicitTarget) ||
-        d.domain === 'surakshaguards.in' ||
-        d.domain === 'gov.pk' ||
-        d.domain === 'kingqueen.in';
+      const isExplicitTarget = Boolean(d.isExplicitTarget);
 
       // If not explicitly targeted, associate with its origin TLD zone (.com, .in, etc.)
       let effectiveTldZone = '';
@@ -181,10 +177,6 @@ export async function GET() {
           const parts = d.domain.toLowerCase().split('.');
           effectiveTldZone = `.${parts[parts.length - 1]}`;
         }
-      }
-
-      if (d.domain === 'surakshaguards.in' && d.tldZone) {
-        MongoScrapedResultModel.updateOne({ _id: d._id }, { $set: { tldZone: '', isExplicitTarget: true } }).catch(() => {});
       }
 
       return {

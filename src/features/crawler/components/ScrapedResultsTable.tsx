@@ -429,11 +429,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
       }
     } catch {}
 
-    // Special safety guard for explicit direct targets
-    explicitIndividualTargetSet.add('surakshaguards.in');
-    explicitIndividualTargetSet.add('gov.pk');
-    explicitIndividualTargetSet.add('kingqueen.in');
-
     const finalGroups: ScrapedDataRecord[] = [];
     const groupedChildDomainIds = new Set<string>();
 

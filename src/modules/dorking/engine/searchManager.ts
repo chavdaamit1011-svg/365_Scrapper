@@ -8,7 +8,6 @@ import { GoogleSearchProvider } from '../providers/googleProvider';
 import { BingSearchProvider } from '../providers/bingProvider';
 import { SerpApiSearchProvider } from '../providers/serpApiProvider';
 import { DuckDuckGoSearchProvider } from '../providers/duckduckgoProvider';
-import { MockSearchProvider } from '../providers/mockProvider';
 import { SearchResultItem, ProviderStats } from '../types/dorking.types';
 
 export interface SearchManagerConfig {
@@ -27,12 +26,11 @@ export class SearchManager {
     this.concurrency = config.concurrency || 2;
     this.maxPagesPerQuery = config.maxPagesPerQuery || 2;
 
-    // Register built-in providers
+    // Register built-in providers (Strictly real online providers)
     this.registerProvider(new DuckDuckGoSearchProvider());
     this.registerProvider(new GoogleSearchProvider());
     this.registerProvider(new BingSearchProvider());
     this.registerProvider(new SerpApiSearchProvider());
-    this.registerProvider(new MockSearchProvider());
   }
 
   registerProvider(provider: BaseSearchProvider): void {
@@ -67,16 +65,8 @@ export class SearchManager {
       } else if (provider.isConfigured()) {
         // If no providers specifically requested, use all configured real providers.
         // MockDev is only included if no real providers are configured, or explicitly requested.
-        if (provider.name !== 'MockDev') {
-          list.push(provider);
-        }
+        list.push(provider);
       }
-    }
-
-    // Fallback: If no real provider is configured, fallback to MockDev
-    if (list.length === 0) {
-      const mock = this.providers.get('mockdev');
-      if (mock) list.push(mock);
     }
 
     return list;

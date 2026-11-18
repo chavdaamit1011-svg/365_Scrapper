@@ -38,11 +38,10 @@ export const DorkingDashboard: React.FC = () => {
   const [targetDomain, setTargetDomain] = useState('');
   const [customQueriesInput, setCustomQueriesInput] = useState('');
   const [selectedProviders, setSelectedProviders] = useState<string[]>([
+    'DuckDuckGo',
     'Google',
     'Bing',
     'SerpApi',
-    'SearXNG',
-    'MockDev',
   ]);
   const [includeInUrlKeywords, setIncludeInUrlKeywords] = useState(true);
   const [isStarting, setIsStarting] = useState(false);
@@ -65,7 +64,7 @@ export const DorkingDashboard: React.FC = () => {
   const [copiedHost, setCopiedHost] = useState<string | null>(null);
 
   // Available Providers
-  const providerOptions = ['Google', 'Bing', 'SerpApi', 'SearXNG', 'MockDev'];
+  const providerOptions = ['DuckDuckGo', 'Google', 'Bing', 'SerpApi', 'SearXNG'];
 
   const toggleProvider = (name: string) => {
     setSelectedProviders((prev) =>

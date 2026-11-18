@@ -546,17 +546,6 @@ export function useCrawlerController(
             }
           }
 
-          // Prioritize core hubs (gov.in, flipkart.in, amazon.in, etc.) first
-          const topHubs = ['gov.in', 'flipkart.in', 'amazon.in', 'swiggy.in', 'zomato.in', 'nic.in', 'tcs.in', 'infosys.in'];
-          discoveredList.sort((a, b) => {
-            const aHub = topHubs.indexOf(a);
-            const bHub = topHubs.indexOf(b);
-            if (aHub !== -1 && bHub !== -1) return aHub - bHub;
-            if (aHub !== -1) return -1;
-            if (bHub !== -1) return 1;
-            return 0;
-          });
-
           // Track true total discovered root domains across the active zone
           const totalDiscoveredSoFar = Math.max(discJson.totalDiscovered || 0, discoveredList.length);
           zoneDiscoveredCountRef.current = totalDiscoveredSoFar;

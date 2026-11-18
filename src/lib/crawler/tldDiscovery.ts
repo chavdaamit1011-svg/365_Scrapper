@@ -41,359 +41,6 @@ export function normalizeTld(raw: string): string {
 }
 
 /**
- * High-value seed registries for instant discovery upon entering a TLD
- */
-const TLD_SEED_REGISTRY: Record<string, string[]> = {
-  in: [
-    // E-Commerce, Retail & Quick-Commerce
-    'flipkart.in',
-    'amazon.in',
-    'swiggy.in',
-    'zomato.in',
-    'myntra.in',
-    'ajio.in',
-    'nykaa.in',
-    'tatacliq.in',
-    'meesho.in',
-    'snapdeal.in',
-    'indiamart.in',
-    'tradeindia.in',
-    'justdial.in',
-    'lenskart.in',
-    'firstcry.in',
-    'pepperfry.in',
-    'urbancompany.in',
-    'bigbasket.in',
-    'blinkit.in',
-    'zepto.in',
-    'licious.in',
-    'dunzo.in',
-    'boat-lifestyle.in',
-    'mamaearth.in',
-    'sugarcosmetics.in',
-    'purplle.in',
-    'croma.in',
-    'reliancedigital.in',
-    'vijaysales.in',
-    'beardo.in',
-    'mcaffeine.in',
-    'bewakoof.in',
-    'fabindia.in',
-    'titan.in',
-    'tanishq.in',
-    'bluestone.in',
-    'caratlane.in',
-    'decathlon.in',
-    'clovia.in',
-    'zivame.in',
-    'hamleys.in',
-    // Banking, FinTech, Wealth & Insurance
-    'hdfcbank.in',
-    'icicibank.in',
-    'sbi.co.in',
-    'axisbank.in',
-    'kotak.in',
-    'indusind.in',
-    'yesbank.in',
-    'pnbindia.in',
-    'bankofbaroda.in',
-    'canarabank.in',
-    'idbibank.in',
-    'rblbank.in',
-    'idfcfirstbank.in',
-    'federalbank.in',
-    'southindianbank.in',
-    'bandhanbank.in',
-    'paytm.in',
-    'phonepe.in',
-    'bharatpe.in',
-    'cred.in',
-    'razorpay.in',
-    'zerodha.in',
-    'groww.in',
-    'upstox.in',
-    'angelone.in',
-    'policybazaar.in',
-    'paisabazaar.in',
-    'bankbazaar.in',
-    'mobikwik.in',
-    'billdesk.in',
-    'ccavenue.in',
-    'cashfree.in',
-    'navi.in',
-    'sliceit.in',
-    'jupiter.in',
-    'etmoney.in',
-    'smallcase.in',
-    'kuvera.in',
-    // Tech, SaaS, IT Giants & Startups
-    'tcs.in',
-    'infosys.in',
-    'wipro.in',
-    'hcltech.in',
-    'techmahindra.in',
-    'lntinfotech.in',
-    'mindtree.in',
-    'mphasis.in',
-    'tatamotors.in',
-    'reliance.in',
-    'jio.in',
-    'airtel.in',
-    'vodafoneidea.in',
-    'postman.in',
-    'browserstack.in',
-    'zoho.in',
-    'freshworks.in',
-    'inmobi.in',
-    'hasura.in',
-    'chargebee.in',
-    'clevertap.in',
-    'moengage.in',
-    'yellow.ai',
-    'darwinbox.in',
-    'ola.in',
-    'rapido.in',
-    'redbus.in',
-    'makemytrip.in',
-    'yatra.in',
-    'cleartrip.in',
-    'easemytrip.in',
-    'ixigo.in',
-    'oyo.in',
-    'blusmart.in',
-    'abhibus.in',
-    'bookmyshow.in',
-    'paytminsider.in',
-    'upwork.in',
-    // Jobs, Classifieds & Real Estate
-    'naukri.in',
-    'foundit.in',
-    'shine.in',
-    'internshala.in',
-    'timesjobs.in',
-    'monsterindia.in',
-    'magicbricks.in',
-    '99acres.in',
-    'housing.in',
-    'nobroker.in',
-    'squareyards.in',
-    'proptiger.in',
-    'shaadi.in',
-    'jeevansathi.in',
-    'bharatmatrimony.in',
-    'olx.in',
-    'quikr.in',
-    // EdTech & Educational Portals
-    'geeksforgeeks.in',
-    'unacademy.in',
-    'byjus.in',
-    'vedantu.in',
-    'physicswallah.in',
-    'scaler.in',
-    'upgrad.in',
-    'simplilearn.in',
-    'cuemath.in',
-    'eruditus.in',
-    'toppr.in',
-    'embibe.in',
-    'classplus.in',
-    'adda247.in',
-    'testbook.in',
-    // Media, News, Broadcast & Publishing
-    'timesofindia.in',
-    'hindustantimes.in',
-    'thehindu.in',
-    'indianexpress.in',
-    'ndtv.in',
-    'moneycontrol.in',
-    'economictimes.in',
-    'livemint.in',
-    'business-standard.in',
-    'zeenews.in',
-    'aajtak.in',
-    'abplive.in',
-    'indiatoday.in',
-    'news18.in',
-    'firstpost.in',
-    'thequint.in',
-    'scroll.in',
-    'thewire.in',
-    'opindia.in',
-    'republicworld.in',
-    'tv9hindi.in',
-    'dainikbhaskar.in',
-    'jagran.in',
-    'amarujala.in',
-    'patrika.in',
-    'lokmat.in',
-    'mathrubhumi.in',
-    'manoramaonline.in',
-    'eenadu.in',
-    'sakshi.in',
-    'dailythanthi.in',
-    'dinamalar.in',
-    // Automobile, Mobility & Classifieds
-    'carwale.in',
-    'bikewale.in',
-    'cardekho.in',
-    'bikedekho.in',
-    'droom.in',
-    'cars24.in',
-    'spinny.in',
-    'marutisuzuki.in',
-    'mahindra.in',
-    'hyundai.in',
-    'heromotocorp.in',
-    'tvsmotor.in',
-    'royalenfield.in',
-    'bajajauto.in',
-    // Healthcare, Hospitals & Pharma
-    'apollohospitals.in',
-    'fortishealthcare.in',
-    'maxhealthcare.in',
-    'manipalhospitals.in',
-    '1mg.in',
-    'pharmeasy.in',
-    'netmeds.in',
-    'practo.in',
-    'medplusmart.in',
-    'sunpharma.in',
-    'drreddys.in',
-    'cipla.in',
-    'lupin.in',
-    'torrentpharma.in',
-    'biocon.in',
-    // Government, Citizen Services & PSU
-    'gov.in',
-    'nic.in',
-    'irctc.co.in',
-    'makeinindia.in',
-    'mygov.in',
-    'nvsp.in',
-    'rbi.org.in',
-    'licindia.co.in',
-    'bhel.co.in',
-    'sail.co.in',
-    'ongc.co.in',
-    'iocl.co.in',
-    'bpcl.co.in',
-    'hpcl.co.in',
-    'gailonline.co.in',
-    'surakshaguards.in',
-    'kingqueen.in',
-  ],
-  'gov.in': [
-    'india.gov.in',
-    'digitalindia.gov.in',
-    'mygov.in',
-    'uidai.gov.in',
-    'cowin.gov.in',
-    'pmindia.gov.in',
-  ],
-  'nic.in': [
-    'ssc.nic.in',
-    'morth.nic.in',
-    'cbse.nic.in',
-    'jeemain.nic.in',
-    'upsc.nic.in',
-    'supremecourtofindia.nic.in',
-    'indiannavy.nic.in',
-    'indianairforce.nic.in',
-    'nrega.nic.in',
-    'eproc.nic.in',
-    'davp.nic.in',
-    'publicationsdivision.nic.in',
-    'consumeraffairs.nic.in',
-    'fert.nic.in',
-    'chemicals.nic.in',
-    'petroleum.nic.in',
-    'coal.nic.in',
-  ],
-  'co.in': [
-    'sbi.co.in',
-    'irctc.co.in',
-    'licindia.co.in',
-    'bhel.co.in',
-    'sail.co.in',
-    'ongc.co.in',
-    'iocl.co.in',
-    'bpcl.co.in',
-    'hpcl.co.in',
-    'gailonline.co.in',
-  ],
-  com: [
-    'google.com',
-    'microsoft.com',
-    'apple.com',
-    'amazon.com',
-    'meta.com',
-    'openai.com',
-    'github.com',
-    'linkedin.com',
-    'twitter.com',
-    'x.com',
-    'youtube.com',
-    'netflix.com',
-    'spotify.com',
-    'salesforce.com',
-    'adobe.com',
-    'oracle.com',
-    'ibm.com',
-    'intel.com',
-    'cisco.com',
-    'nvidia.com',
-    'cloudflare.com',
-    'stripe.com',
-    'shopify.com',
-    'slack.com',
-    'zoom.us',
-    'dropbox.com',
-    'notion.so',
-    'airbnb.com',
-    'uber.com',
-    'walmart.com',
-    'ebay.com',
-    'target.com',
-    'bestbuy.com',
-    'aliexpress.com',
-    'etsy.com',
-    'paypal.com',
-    'visa.com',
-    'mastercard.com',
-    'cnn.com',
-    'bbc.com',
-    'nytimes.com',
-    'forbes.com',
-    'bloomberg.com',
-    'wsj.com',
-    'reuters.com',
-    'booking.com',
-    'expedia.com',
-    'tripadvisor.com',
-    'reddit.com',
-    'quora.com',
-    'medium.com',
-    'stackoverflow.com',
-    'yahoo.com',
-    'bing.com',
-    'duckduckgo.com',
-  ],
-  org: [
-    'wikipedia.org',
-    'archive.org',
-    'eff.org',
-    'mozilla.org',
-    'w3.org',
-    'apache.org',
-    'linuxfoundation.org',
-    'python.org',
-    'nodejs.org',
-    'un.org',
-    'who.int',
-  ],
-};
-
-/**
  * Validates whether a candidate domain belongs to the target TLD zone
  */
 export function isDomainInTldZone(domain: string, tld: string): boolean {
@@ -452,11 +99,8 @@ async function fetchCrtShTldDomains(tld: string, cycle: number = 1): Promise<str
   const cleanTld = normalizeTld(tld);
   const results = new Set<string>();
 
-  // Rotate query prefixes across cycles to get continuous fresh domains
-  const prefixSeeds = ['', 'shop', 'online', 'tech', 'store', 'india', 'news', 'portal', 'api', 'app', 'web', 'e', 'm', 'co', 'cloud', 'data', 'pay', 'bank', 'secure', 'corp'];
-  const seedPrefix = prefixSeeds[(cycle - 1) % prefixSeeds.length];
-
-  const queryParam = seedPrefix ? `%25${seedPrefix}%25.${cleanTld}` : `%25.${cleanTld}`;
+  // Pure wildcard query without static prefix seeds
+  const queryParam = `%25.${cleanTld}`;
   const crtUrl = `https://crt.sh/?q=${queryParam}&output=json`;
 
   try {
@@ -501,18 +145,8 @@ async function fetchDorkTldDomains(tld: string, cycle: number = 1): Promise<stri
   const cleanTld = normalizeTld(tld);
   const results = new Set<string>();
 
-  // Dork variations based on cycle to harvest distinct domains continuously
-  const dorkQueries = [
-    `site:*.${cleanTld}`,
-    `site:.${cleanTld} contact email phone`,
-    `site:.${cleanTld} "contact us" OR "about us"`,
-    `site:.${cleanTld} store OR services OR official`,
-    `site:.${cleanTld} login OR portal OR support`,
-    `site:*.${cleanTld} payment OR checkout OR cart`,
-    `site:*.${cleanTld} api OR dev OR cloud`,
-    `site:*.${cleanTld} news OR media OR blog`,
-  ];
-  const query = dorkQueries[(cycle - 1) % dorkQueries.length];
+  // Pure dynamic search dork query without static keyword lists
+  const query = cycle === 1 ? `site:*.${cleanTld}` : `site:*.${cleanTld} -www`;
 
   try {
     const ddgUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
@@ -606,16 +240,7 @@ export async function discoverTldRootDomains(
     return d;
   };
 
-  // 1. Gather Seeds for this TLD
-  const seedList = TLD_SEED_REGISTRY[cleanTld] || [];
-  for (const s of seedList) {
-    if (isDomainInTldZone(s, cleanTld)) {
-      combinedDomains.add(normalizeTargetDomain(s));
-    }
-  }
-  const seedCount = combinedDomains.size;
-
-  // 2. Fetch Certificate Transparency & Dorking in parallel
+  // 1. Fetch Certificate Transparency & Dorking in parallel
   const [crtShDomains, dorkDomains] = await Promise.all([
     fetchCrtShTldDomains(cleanTld, cycle).catch(() => []),
     fetchDorkTldDomains(cleanTld, cycle).catch(() => []),
@@ -656,12 +281,9 @@ export async function discoverTldRootDomains(
     newDomains = Array.from(combinedDomains);
   }
 
-  // Prioritize new domains first, and ensure high-value core hubs (gov.in, flipkart.in, amazon.in, etc.) lead the pass
+  // Prioritize new domains first
   const rawOrdered = [...newDomains, ...existingDomains];
-  const highPriorityHubs = ['gov.in', 'flipkart.in', 'amazon.in', 'swiggy.in', 'zomato.in', 'nic.in', 'tcs.in', 'infosys.in'];
-  const leadingHubs = rawOrdered.filter((d) => highPriorityHubs.includes(d));
-  const remaining = rawOrdered.filter((d) => !highPriorityHubs.includes(d));
-  const orderedList = [...leadingHubs, ...remaining].slice(0, maxPerPass);
+  const orderedList = rawOrdered.slice(0, maxPerPass);
 
   return {
     tld: cleanTld,
@@ -672,7 +294,7 @@ export async function discoverTldRootDomains(
     offlineDomains,
     allDomains: orderedList,
     sources: {
-      seedCount,
+      seedCount: 0,
       crtShCount: crtShDomains.length,
       dorkCount: dorkDomains.length,
     },
