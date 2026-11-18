@@ -13,7 +13,7 @@
 import dns from 'dns';
 import * as tls from 'tls';
 import { connectMongo } from '../mongodb';
-import { getComprehensiveGovSubdomains } from './govSubdomainsRegistry';
+import { getComprehensiveGovSubdomains, getGovSubdomainsBatch } from './govSubdomainsRegistry';
 
 const dnsResolver = new dns.promises.Resolver();
 try {
@@ -115,8 +115,12 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string
 
   const parts = s.split('.');
   if (parts.length < 2) return null;
+  // Reject junk hash labels (e.g. 132b114842d5f7d97bcc9a5af45dab47), UUIDs, and raw tracking IDs
+  const hexHashRegex = /^[a-f0-9]{18,}$/i;
   for (const p of parts) {
     if (!p || p.length > 63 || p.startsWith('-') || p.endsWith('-')) return null;
+    if (hexHashRegex.test(p)) return null;
+    if (/^[0-9]+$/.test(p) && p.length > 10) return null;
   }
 
   return s;
@@ -158,9 +162,9 @@ export function extractSubdomainsFromText(text: string, rootDomain: string): str
 }
 
 /**
- * High-performance concurrent subdomain reconnaissance
+ * High-performance progressive concurrent subdomain reconnaissance (Cycle-Stratified)
  */
-export async function discoverAllSubdomains(rootDomain: string): Promise<string[]> {
+export async function discoverAllSubdomains(rootDomain: string, cycle: number = 1): Promise<string[]> {
   const cleanRoot = rootDomain.trim().toLowerCase();
   const subdomains = new Set<string>();
 
@@ -178,9 +182,9 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     }
   };
 
-  // If cleanRoot is gov.in, immediately inject comprehensive 2,800+ authentic Indian government portals & subdomains
+  // For gov.in, inject authentic progressive batches per cycle
   if (cleanRoot === 'gov.in') {
-    const govSubs = getComprehensiveGovSubdomains();
+    const govSubs = getGovSubdomainsBatch(cycle);
     for (const s of govSubs) addSub(s);
   }
 
@@ -499,14 +503,15 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
     );
   };
 
-  // 11. Vector: Archive.org Wayback Machine CDX (Deep Open Intelligence)
+  // 11. Vector: Archive.org Wayback Machine CDX (Progressive Wave per Cycle)
   const fetchArchiveOrg = async () => {
     try {
+      const archiveLimit = Math.min(250, 75 * cycle);
       const res = await fetch(
-        `https://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=10000`,
+        `https://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=${archiveLimit}`,
         {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(20000),
+          signal: AbortSignal.timeout(12000),
         }
       );
 
@@ -606,10 +611,15 @@ export async function discoverAllSubdomains(rootDomain: string): Promise<string[
       'discom', 'energygov', 'solar', 'wind', 'water', 'jal', 'jalshakti', 'swachh', 'krishi', 'kisan'
     ];
 
+    // Progressive DNS dictionary probing per cycle (avoids overwhelming, discovers new subdomains each cycle)
+    const startIdx = cycle === 1 ? 0 : cycle === 2 ? 75 : cycle === 3 ? 175 : 325;
+    const endIdx = cycle === 1 ? 75 : cycle === 2 ? 175 : cycle === 3 ? 325 : candidatePrefixes.length;
+    const cycleCandidates = candidatePrefixes.slice(startIdx, endIdx);
+
     // Concurrently resolve in high-speed batches with Anycast DNS and non-blocking timeout
-    const batchSize = 60;
-    for (let i = 0; i < candidatePrefixes.length; i += batchSize) {
-      const batch = candidatePrefixes.slice(i, i + batchSize);
+    const batchSize = 50;
+    for (let i = 0; i < cycleCandidates.length; i += batchSize) {
+      const batch = cycleCandidates.slice(i, i + batchSize);
       await Promise.allSettled(
         batch.map(async (prefix) => {
           const candidate = `${prefix}.${cleanRoot}`;

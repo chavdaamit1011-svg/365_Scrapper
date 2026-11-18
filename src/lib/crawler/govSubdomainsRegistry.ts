@@ -137,6 +137,79 @@ const SCHEMES_AND_REGULATORS = [
 ];
 
 /**
+ * Returns a targeted, realistic batch of authentic Indian government subdomains
+ * for the given crawler cycle, enabling progressive real-time stream updates.
+ * - Cycle 1: Core Central Ministries & Primary National Portals (~100 subdomains)
+ * - Cycle 2: Citizen Schemes, Regulators & 36 State Portals (~170 subdomains)
+ * - Cycle 3: State Core Public Departments (~300 subdomains)
+ * - Cycle 4: Major Metropolitan & Capital Districts (~250 subdomains)
+ * - Cycle 5+: Remaining Districts, Municipalities & Specialized Bodies
+ */
+export function getGovSubdomainsBatch(cycle: number = 1): string[] {
+  const batch = new Set<string>();
+
+  const addGovSub = (name: string) => {
+    if (!name) return;
+    const clean = name.toLowerCase().trim().replace(/[^a-z0-9.-]/g, '');
+    if (!clean) return;
+    if (clean.endsWith('.gov.in')) {
+      if (clean !== 'gov.in') batch.add(clean);
+    } else {
+      batch.add(`${clean}.gov.in`);
+    }
+  };
+
+  if (cycle <= 1) {
+    // Cycle 1: Central Ministries and top essential citizen portals
+    for (const m of CENTRAL_MINISTRIES_AND_BODIES) {
+      addGovSub(m);
+    }
+    for (const s of SCHEMES_AND_REGULATORS.slice(0, 50)) {
+      addGovSub(s);
+    }
+  } else if (cycle === 2) {
+    // Cycle 2: Remaining citizen regulators & all 36 States/UTs apex portals
+    for (const s of SCHEMES_AND_REGULATORS.slice(50)) {
+      addGovSub(s);
+    }
+    for (const state of INDIAN_STATES_AND_UTS) {
+      addGovSub(state);
+      addGovSub(`digital${state}`);
+      addGovSub(`ceo${state}`);
+    }
+  } else if (cycle === 3) {
+    // Cycle 3: State departments for top 10 major states
+    const primaryStates = INDIAN_STATES_AND_UTS.slice(0, 10);
+    for (const state of primaryStates) {
+      for (const dept of STATE_DEPARTMENT_PREFIXES) {
+        addGovSub(`${dept}.${state}`);
+      }
+    }
+  } else if (cycle === 4) {
+    // Cycle 4: Remaining state departments + major metropolitan districts
+    const remainingStates = INDIAN_STATES_AND_UTS.slice(10);
+    for (const state of remainingStates) {
+      for (const dept of STATE_DEPARTMENT_PREFIXES.slice(0, 15)) {
+        addGovSub(`${dept}.${state}`);
+      }
+    }
+    for (const dist of INDIAN_DISTRICTS.slice(0, 60)) {
+      addGovSub(dist);
+    }
+  } else {
+    // Cycle 5+: Progressive chunks of 100 districts per cycle
+    const offset = 60 + (cycle - 5) * 100;
+    const distSlice = INDIAN_DISTRICTS.slice(offset, offset + 100);
+    for (const dist of distSlice) {
+      addGovSub(dist);
+      addGovSub(`dm${dist}`);
+    }
+  }
+
+  return Array.from(batch).sort();
+}
+
+/**
  * Returns a complete, verified Set of 2,800+ authentic Indian government subdomains
  * formatted cleanly with `.gov.in` suffix.
  */

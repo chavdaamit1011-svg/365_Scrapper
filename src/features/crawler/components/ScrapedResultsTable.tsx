@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Download,
@@ -165,11 +165,15 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
 
-  // Automatically switch to Live Active Scraping whenever a crawl run is triggered
+  // Automatically switch tabs: Live during active crawl, Database when completed/idle
+  const prevIsCrawlingRef = useRef(isCrawling);
   useEffect(() => {
-    if (isCrawling) {
+    if (isCrawling && !prevIsCrawlingRef.current) {
       setDatasetView('live');
+    } else if (!isCrawling && prevIsCrawlingRef.current) {
+      setDatasetView('database');
     }
+    prevIsCrawlingRef.current = isCrawling;
   }, [isCrawling]);
 
   // Group and normalize records by root domain so every domain is an organized master entity
@@ -647,7 +651,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
   }, [activeTargetDomain, activeWorkers]);
 
   // Partition domainGroups into liveGroups vs databaseGroups
-  // Live Active Scraping: ONLY domains that are actively crawling right now!
+  // Live Active Scraping: ONLY domains that are actively crawling in the current active session!
   // Previously Scraped Database: All domains whose scraping has completed and are stored in DB!
   const { liveGroups, databaseGroups } = useMemo(() => {
     const live: ScrapedDataRecord[] = [];
@@ -655,9 +659,12 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
 
     for (const group of domainGroups) {
       const dLower = group.domain.toLowerCase().trim();
+      // Only domains actively being crawled in the current active session belong in liveGroups
       const isCurrentlyScraping =
-        group.status === 'CRAWLING' ||
-        (isCrawling && activeCrawlingDomainSet.has(dLower));
+        isCrawling &&
+        (activeCrawlingDomainSet.size > 0
+          ? activeCrawlingDomainSet.has(dLower)
+          : group.status === 'CRAWLING');
 
       if (isCurrentlyScraping) {
         live.push(group);
@@ -978,7 +985,7 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
             }}
           >
             {[
-              { id: 'all' as const, label: `All (${domainGroups.length})` },
+              { id: 'all' as const, label: `All (${activeDatasetGroups.length})` },
               { id: 'subdomains' as const, label: `Subdomains (${subCount})` },
               { id: 'contacts' as const, label: `Contacts (${contactCount})` },
               { id: 'ecommerce' as const, label: `E-Commerce (${ecomCount})` },
@@ -1519,47 +1526,6 @@ export const ScrapedResultsTable: React.FC<ScrapedResultsTableProps> = ({
                                   🛒 E-Commerce
                                 </span>
                               ) : null}
-
-                              {/* 24/7 Reconciliation Lifecycle Badges */}
-                              {!isCurrentlyCrawling && !isOffline && !isTldRecord && (
-                                r.reconciliation?.domain_action === 'NEW' ? (
-                                  <span
-                                    style={{
-                                      fontSize: '10px',
-                                      fontWeight: 700,
-                                      color: '#047857',
-                                      background: '#ecfdf5',
-                                      padding: '1px 6px',
-                                      borderRadius: '4px',
-                                      border: '1px solid #a7f3d0',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '3px',
-                                    }}
-                                    title="Newly discovered domain in active 24/7 TLD cycle"
-                                  >
-                                    ✨ NEW
-                                  </span>
-                                ) : r.reconciliation?.domain_action === 'CHANGED' || (r.reconciliation?.new_subdomains && r.reconciliation.new_subdomains > 0) ? (
-                                  <span
-                                    style={{
-                                      fontSize: '10px',
-                                      fontWeight: 700,
-                                      color: '#0369a1',
-                                      background: '#e0f2fe',
-                                      padding: '1px 6px',
-                                      borderRadius: '4px',
-                                      border: '1px solid #bae6fd',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: '3px',
-                                    }}
-                                    title="Domain intelligence verified and updated across cycles"
-                                  >
-                                    🔄 UPDATED
-                                  </span>
-                                ) : null
-                              )}
                             </div>
                             {isTldRecord ? (
                               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748b', marginTop: '3px' }}>

@@ -163,7 +163,8 @@ export async function crawlDomain(
       DorkingDiscoveryEngine.getInstance().startJob({ domain: rootDomain }).catch(() => {});
     } catch {}
 
-    const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain);
+    const currentCycle = options.cycle || 1;
+    const discoveredSubdomainsList = await discoverAllSubdomains(rootDomain, currentCycle);
     for (const s of discoveredSubdomainsList) {
       addSafeSubdomain(s);
     }
@@ -238,129 +239,20 @@ export async function crawlDomain(
   let errorTitle: string | null = null;
   let siteIntel = classifySite('', startingHost);
 
-  if (!rootFetchResult.ok) {
-    if (allSubdomains.size > 0) {
-      console.log(`[CrawlerEngine] Apex URL did not respond directly (${rootFetchResult.errorCode}). Probing discovered subdomains for live landing page...`);
-      
-      // Check if any discovered subdomain (prioritizing www.) has a live website
-      const candidateSubs = Array.from(allSubdomains).slice(0, 6);
-      candidateSubs.sort((a, b) => (a.startsWith('www.') ? -1 : b.startsWith('www.') ? 1 : 0));
-      
-      let subFetchSuccess: any = null;
-      for (const candSub of candidateSubs) {
-        try {
-          const resCand = await fetchUniversal(`https://${candSub}`, Math.min(timeoutMs, 5000));
-          if (resCand.ok && resCand.html) {
-            subFetchSuccess = resCand;
-            console.log(`[CrawlerEngine] Discovered live responsive website on subdomain: https://${candSub} (HTTP ${resCand.status})`);
-            break;
-          }
-        } catch {}
-      }
+  let subFetchSuccess: any = null;
 
-      if (subFetchSuccess) {
-        siteIntel = classifySite(subFetchSuccess.html, startingHost);
-        finalStatus = 'RESOLVED';
-        errorCode = null;
-        errorTitle = null;
-
-        visitedRecords.push({
-          url: subFetchSuccess.finalUrl,
-          title: siteIntel.title,
-          statusCode: subFetchSuccess.status,
-          depth: 0,
-          timestamp: new Date().toISOString(),
-        });
-
-        // Extract verified emails, phones, and subdomains from live subdomain
-        const subEmails = await extractAndVerifyEmails(subFetchSuccess.html, subFetchSuccess.finalUrl);
-        for (const em of subEmails) allEmails.set(em.email, em);
-        for (const ph of extractPhoneDetails(subFetchSuccess.html, subFetchSuccess.finalUrl)) {
-          if (!allPhones.has(ph.phone)) allPhones.set(ph.phone, ph);
-        }
-        for (const sub of extractSubdomainsFromText(subFetchSuccess.html, rootDomain)) allSubdomains.add(sub);
-      } else {
-        // Apex and subdomains are network/DNS only
-        console.log(`[CrawlerEngine] Apex and subdomains are network services only. Classifying domain scope.`);
-        finalStatus = 'RESOLVED';
-        errorCode = null;
-        errorTitle = null;
-
-        const scopeTitle = `${startingHost.toUpperCase()} Network & Domain Scope`;
-        const scopeSummary = `${startingHost} operates an active network scope with ${allSubdomains.size} discovered subdomains and SSL services.`;
-
-        visitedRecords.push({
-          url: startUrl,
-          title: scopeTitle,
-          statusCode: 200,
-          depth: 0,
-          timestamp: new Date().toISOString(),
-        });
-
-        const hostClassification = classifySite('', startingHost);
-        siteIntel = {
-          title: scopeTitle,
-          metaDescription: scopeSummary,
-          category: hostClassification.category,
-          categoryIcon: hostClassification.categoryIcon,
-          summary: scopeSummary,
-          technologies: ['DNS / SSL Infrastructure'],
-          isEcommerce: false,
-          ecommerceSignals: [],
-          phones: [],
-        };
-      }
-    } else {
-      // Site is truly offline or unreachable on root URL with 0 subdomains
-      console.log(`[CrawlerEngine] Root URL unreachable (${rootFetchResult.errorCode}): ${rootFetchResult.error}`);
-
-      finalStatus = rootFetchResult.errorCode === 'ERR_NAME_NOT_RESOLVED' ? 'DNS_ERROR' : 'TIMED_OUT';
-      errorCode = rootFetchResult.errorCode || 'ERR_CONNECTION_TIMED_OUT';
-      errorTitle = rootFetchResult.errorTitle || 'Connection Timed Out';
-
-      const errorSummary = `Target website server took too long to respond (${errorCode}). Server did not respond within timeout limits.`;
-
-      visitedRecords.push({
-        url: startUrl,
-        title: errorTitle,
-        statusCode: rootFetchResult.status || 504,
-        depth: 0,
-        errorCode,
-        timestamp: new Date().toISOString(),
-      });
-
-      siteIntel = {
-        title: errorTitle,
-        metaDescription: '',
-        category: errorTitle,
-        categoryIcon: '⚠️',
-        summary: errorSummary,
-        technologies: [],
-        isEcommerce: false,
-        ecommerceSignals: [],
-        phones: [],
-      };
-    }
-  } else {
-    // Root URL is live! Extract metadata & crawl pages
-    console.log(`[CrawlerEngine] Successfully connected to ${startUrl} (HTTP ${rootFetchResult.status})`);
-
+  if (rootFetchResult.ok && rootFetchResult.html) {
+    console.log(`[CrawlerEngine] Successfully connected to apex ${startUrl} (HTTP ${rootFetchResult.status})`);
     siteIntel = classifySite(rootFetchResult.html, startingHost);
+    finalStatus = 'RESOLVED';
 
-    // Extract emails from root page
     const rootEmails = await extractAndVerifyEmails(rootFetchResult.html, rootFetchResult.finalUrl);
-    for (const em of rootEmails) {
-      allEmails.set(em.email, em);
-    }
+    for (const em of rootEmails) allEmails.set(em.email, em);
 
-    // Extract phones from root page
     for (const ph of extractPhoneDetails(rootFetchResult.html, rootFetchResult.finalUrl)) {
-      if (!allPhones.has(ph.phone)) {
-        allPhones.set(ph.phone, ph);
-      }
+      if (!allPhones.has(ph.phone)) allPhones.set(ph.phone, ph);
     }
 
-    // Record root page
     visitedRecords.push({
       url: rootFetchResult.finalUrl,
       title: siteIntel.title,
@@ -370,45 +262,115 @@ export async function crawlDomain(
     });
     visitedUrls.add(startUrl);
     visitedUrls.add(rootFetchResult.finalUrl);
+  } else {
+    console.log(`[CrawlerEngine] Apex URL did not respond directly (${rootFetchResult.errorCode}). Probing discovered subdomains for live landing page...`);
+    const candidateSubs = Array.from(allSubdomains).slice(0, 8);
+    candidateSubs.sort((a, b) => (a.startsWith('www.') ? -1 : b.startsWith('www.') ? 1 : 0));
 
-    // Queue BFS crawl
-    interface QueueItem {
-      priority: number;
-      depth: number;
-      url: string;
-    }
-
-    const queue: QueueItem[] = [];
-
-    // Extract initial links and subdomains
-    const rootLinks = extractLinksAndSubdomains(rootFetchResult.html, rootFetchResult.finalUrl, startingHost);
-    for (const sub of rootLinks.discoveredSubdomains) {
-      addSafeSubdomain(sub);
-    }
-    for (const sub of extractSubdomainsFromText(rootFetchResult.html, rootDomain)) {
-      addSafeSubdomain(sub);
-    }
-
-    for (const link of rootLinks.internalUrls) {
-      if (!visitedUrls.has(link) && !queuedUrls.has(link)) {
-        queuedUrls.add(link);
-        queue.push({ priority: getUrlPriority(link), depth: 1, url: link });
-      }
-    }
-
-    // Always inject high-priority contact route candidates to guarantee dedicated contact pages are visited first
-    const contactCandidates = ['/contact', '/contact-us', '/contactus', '/about-us', '/about', '/support', '/reach-us', '/directory'];
-    for (const path of contactCandidates) {
+    for (const candSub of candidateSubs) {
       try {
-        const candUrl = new URL(path, startUrl).toString();
-        if (!visitedUrls.has(candUrl) && !queuedUrls.has(candUrl)) {
-          queuedUrls.add(candUrl);
-          queue.push({ priority: 120, depth: 1, url: candUrl });
+        const resCand = await fetchUniversal(`https://${candSub}`, Math.min(timeoutMs, 5000));
+        if (resCand.ok && resCand.html) {
+          subFetchSuccess = resCand;
+          console.log(`[CrawlerEngine] Discovered live responsive website on subdomain: https://${candSub} (HTTP ${resCand.status})`);
+          break;
         }
       } catch {}
     }
 
-    let pagesCrawled = 1;
+    if (subFetchSuccess) {
+      siteIntel = classifySite(subFetchSuccess.html, startingHost);
+      finalStatus = 'RESOLVED';
+      visitedRecords.push({
+        url: subFetchSuccess.finalUrl,
+        title: siteIntel.title,
+        statusCode: subFetchSuccess.status,
+        depth: 0,
+        timestamp: new Date().toISOString(),
+      });
+      visitedUrls.add(subFetchSuccess.finalUrl);
+
+      const subEmails = await extractAndVerifyEmails(subFetchSuccess.html, subFetchSuccess.finalUrl);
+      for (const em of subEmails) allEmails.set(em.email, em);
+      for (const ph of extractPhoneDetails(subFetchSuccess.html, subFetchSuccess.finalUrl)) {
+        if (!allPhones.has(ph.phone)) allPhones.set(ph.phone, ph);
+      }
+      for (const sub of extractSubdomainsFromText(subFetchSuccess.html, rootDomain)) allSubdomains.add(sub);
+    } else {
+      finalStatus = 'RESOLVED';
+      const scopeTitle = `${startingHost.toUpperCase()} Network & Domain Scope`;
+      const scopeSummary = `${startingHost} operates an active network scope with ${allSubdomains.size} discovered subdomains and SSL services.`;
+      visitedRecords.push({
+        url: startUrl,
+        title: scopeTitle,
+        statusCode: 200,
+        depth: 0,
+        timestamp: new Date().toISOString(),
+      });
+      const hostClassification = classifySite('', startingHost);
+      siteIntel = {
+        title: scopeTitle,
+        metaDescription: scopeSummary,
+        category: hostClassification.category,
+        categoryIcon: hostClassification.categoryIcon,
+        summary: scopeSummary,
+        technologies: ['DNS / SSL Infrastructure'],
+        isEcommerce: false,
+        ecommerceSignals: [],
+        phones: [],
+      };
+    }
+  }
+
+  // Step 3: Active BFS Multi-Page & Multi-Subdomain Web Crawling
+  interface QueueItem {
+    priority: number;
+    depth: number;
+    url: string;
+  }
+
+  const queue: QueueItem[] = [];
+
+  const enqueueUrl = (u: string, priority: number = 50, depth: number = 1) => {
+    try {
+      const parsed = new URL(u);
+      const cleanU = parsed.toString();
+      if (!visitedUrls.has(cleanU) && !queuedUrls.has(cleanU)) {
+        queuedUrls.add(cleanU);
+        queue.push({ priority, depth, url: cleanU });
+      }
+    } catch {}
+  };
+
+  // Seed internal links from root or subFetchSuccess
+  const baseLiveHtml = rootFetchResult.ok ? rootFetchResult.html : subFetchSuccess?.html;
+  const baseLiveUrl = rootFetchResult.ok ? rootFetchResult.finalUrl : subFetchSuccess?.finalUrl;
+
+  if (baseLiveHtml && baseLiveUrl) {
+    const rootLinks = extractLinksAndSubdomains(baseLiveHtml, baseLiveUrl, startingHost);
+    for (const sub of rootLinks.discoveredSubdomains) addSafeSubdomain(sub);
+    for (const sub of extractSubdomainsFromText(baseLiveHtml, rootDomain)) addSafeSubdomain(sub);
+    for (const link of rootLinks.internalUrls) enqueueUrl(link, getUrlPriority(link), 1);
+  }
+
+  // Always inject contact route candidates
+  const targetBaseUrl = baseLiveUrl || `https://${startingHost}`;
+  const contactCandidates = ['/contact', '/contact-us', '/contactus', '/about-us', '/about', '/support', '/reach-us', '/directory'];
+  for (const path of contactCandidates) {
+    try {
+      const candUrl = new URL(path, targetBaseUrl).toString();
+      enqueueUrl(candUrl, 120, 1);
+    } catch {}
+  }
+
+  // Also queue homepages and contact pages of candidate subdomains for this cycle!
+  const cycleSubCandidates = Array.from(allSubdomains).slice(0, 10);
+  for (const sub of cycleSubCandidates) {
+    enqueueUrl(`https://${sub}`, 95, 1);
+    enqueueUrl(`https://${sub}/contact`, 115, 1);
+  }
+
+  let pagesCrawled = visitedRecords.length;
 
     while (queue.length > 0 && pagesCrawled < maxPages) {
       // Sort queue by priority descending
@@ -503,7 +465,6 @@ export async function crawlDomain(
         options.onProgress(pagesCrawled, allSubdomains.size, allEmails.size);
       }
     }
-  }
 
   // Rank verified emails and mark primary
   const verifiedEmailsList = Array.from(allEmails.values()).sort(

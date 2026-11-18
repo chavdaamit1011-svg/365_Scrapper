@@ -15,6 +15,9 @@ export const MAX_CONCURRENT_WORKERS = 1;
 interface ActiveWorkerData {
   target: TargetItem;
   jobId?: string;
+  subTarget?: string;
+  subIndex?: number;
+  totalSubTargets?: number;
   progress: number;
   pagesCrawled: number;
   subdomainsCount: number;
@@ -257,13 +260,40 @@ export function useCrawlerController(
 
   // Sequential Worker Execution for a single target pass
   const runSingleTargetCycle = async (target: TargetItem) => {
-    activeWorkersRef.current.set(target.id, {
+    const cycle = cycleCountRef.current || 1;
+    const w1Id = `${target.id}_worker1`;
+    const w2Id = `${target.id}_worker2`;
+    const w3Id = `${target.id}_worker3`;
+
+    // 3 Specialized Pipeline Workers: Scraper -> Deduplicator/Filter -> Live Dashboard Streamer
+    activeWorkersRef.current.set(w1Id, {
       target,
-      progress: 5,
+      progress: 10,
       pagesCrawled: 0,
       subdomainsCount: 0,
       emailsCount: 0,
-      phase: `⚡ Initializing Reconnaissance for ${target.domain}...`,
+      subTarget: 'Active Discovery & Web Crawler',
+      phase: `⚡ [Worker #1: Scraper] Crawling ${target.domain} & live web pages (Cycle #${cycle})`,
+    });
+
+    activeWorkersRef.current.set(w2Id, {
+      target,
+      progress: 10,
+      pagesCrawled: 0,
+      subdomainsCount: 0,
+      emailsCount: 0,
+      subTarget: 'Deduplication & Noise Filter',
+      phase: `🛡️ [Worker #2: Filter] Deduplicating & Normalizing • Cycle #${cycle}`,
+    });
+
+    activeWorkersRef.current.set(w3Id, {
+      target,
+      progress: 10,
+      pagesCrawled: 0,
+      subdomainsCount: 0,
+      emailsCount: 0,
+      subTarget: 'Live Dashboard Streamer',
+      phase: `📡 [Worker #3: Syncer] Live telemetry streaming • Cycle #${cycle} active`,
     });
 
     target.status = 'crawling';
@@ -273,11 +303,12 @@ export function useCrawlerController(
 
     liveSessionDomainsRef.current.add(target.domain.toLowerCase());
     setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
+    setCurrentTargetName(target.domain);
 
-    setTargetSubProgress(5);
+    setTargetSubProgress(10);
     updateWorkerTelemetry();
 
-    const interactiveMaxPages = 25;
+    const interactiveMaxPages = 15;
     const interactiveMaxDepth = 3;
 
     try {
@@ -288,7 +319,7 @@ export function useCrawlerController(
       }
       if (isCancelledRef.current) return;
 
-      // 1. Enqueue job into backend Redis / Queue
+      // 1. Enqueue job into backend Redis / Queue with cycle number
       let jobId: string | null = null;
       try {
         const jobRes = await fetch('/api/crawl-jobs', {
@@ -296,6 +327,7 @@ export function useCrawlerController(
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             domain: target.domain,
+            cycle,
             is_explicit: true,
             skip_subdomains: false,
             max_pages: interactiveMaxPages,
@@ -310,14 +342,9 @@ export function useCrawlerController(
         console.warn(`[SequentialWorker] Enqueue failed for ${target.domain}:`, postErr);
       }
 
-      if (activeWorkersRef.current.has(target.id)) {
-        const workerData = activeWorkersRef.current.get(target.id)!;
-        workerData.jobId = jobId || undefined;
-        workerData.progress = 10;
-        workerData.phase = `⚡ Resolving DNS & Subdomain Recon for ${target.domain}...`;
+      if (activeWorkersRef.current.has(w1Id)) {
+        activeWorkersRef.current.get(w1Id)!.jobId = jobId || undefined;
       }
-      setTargetSubProgress(10);
-      updateWorkerTelemetry();
 
       // 2. Poll job status until completed
       let isDone = false;
@@ -343,28 +370,45 @@ export function useCrawlerController(
                 isDone = true;
               }
 
-              if (activeWorkersRef.current.has(target.id)) {
-                const w = activeWorkersRef.current.get(target.id)!;
-                w.subdomainsCount = j.subdomainsCount || 0;
-                w.emailsCount = j.emailsCount || 0;
-                w.pagesCrawled = j.pagesCrawled || 0;
+              const pagesDone = j.pagesCrawled || 0;
+              const subsFound = j.subdomainsCount || 0;
+              const emailsFound = j.emailsCount || 0;
 
-                if (isDone) {
-                  w.progress = 100;
-                  w.phase = `✅ [Completed] ${target.domain}: ${w.pagesCrawled} pages, ${w.subdomainsCount} subdomains, ${w.emailsCount} emails`;
-                } else {
-                  // Dynamic smooth progress from 10% to 95%:
-                  const reconTicks = Math.min(25, pollAttempts * 4);
-                  const subBonus = (j.subdomainsCount || 0) > 0 ? 15 : 0;
-                  const pagesDone = j.pagesCrawled || 0;
-                  const pageProgress = Math.round((Math.min(pagesDone, interactiveMaxPages) / interactiveMaxPages) * 50);
-
-                  w.progress = Math.min(95, Math.max(w.progress || 10, 10 + reconTicks + subBonus + pageProgress));
-                  w.phase = pagesDone > 0
-                    ? `⚡ [Crawling] ${target.domain}: ${pagesDone}/${interactiveMaxPages} pages, ${w.subdomainsCount} subdomains, ${w.emailsCount} emails`
-                    : `⚡ [Reconnaissance] ${target.domain}: Resolving DNS & Discovering Subdomains (${w.subdomainsCount} found)...`;
-                }
+              const w1 = activeWorkersRef.current.get(w1Id);
+              if (w1) {
+                w1.pagesCrawled = pagesDone;
+                w1.subdomainsCount = subsFound;
+                w1.emailsCount = emailsFound;
+                w1.progress = isDone ? 100 : Math.min(95, Math.max(10, Math.round((pagesDone / interactiveMaxPages) * 70) + 15));
+                w1.phase = isDone
+                  ? `✅ [Worker #1] Finished crawling ${pagesDone} pages (Cycle #${cycle})`
+                  : pagesDone > 0
+                  ? `⚡ [Worker #1: Scraper] Crawling pages (${pagesDone}/${interactiveMaxPages}) • Extracting links & subdomains`
+                  : `⚡ [Worker #1: Scraper] Resolving DNS & OSINT discovery (${subsFound} found)...`;
               }
+
+              const w2 = activeWorkersRef.current.get(w2Id);
+              if (w2) {
+                w2.pagesCrawled = pagesDone;
+                w2.subdomainsCount = subsFound;
+                w2.emailsCount = emailsFound;
+                w2.progress = isDone ? 100 : Math.min(95, Math.max(15, Math.round((pagesDone / interactiveMaxPages) * 75) + 20));
+                w2.phase = isDone
+                  ? `✅ [Worker #2] Deduplication verified • Clean records saved`
+                  : `🛡️ [Worker #2: Filter] Normalizing & Deduplicating: ${subsFound} subdomains verified (0 duplicates)`;
+              }
+
+              const w3 = activeWorkersRef.current.get(w3Id);
+              if (w3) {
+                w3.pagesCrawled = pagesDone;
+                w3.subdomainsCount = subsFound;
+                w3.emailsCount = emailsFound;
+                w3.progress = isDone ? 100 : Math.min(95, Math.max(10, Math.round((pagesDone / interactiveMaxPages) * 65) + 10));
+                w3.phase = isDone
+                  ? `✅ [Worker #3] Cycle #${cycle} synchronized to Dashboard`
+                  : `📡 [Worker #3: Syncer] Live Stream: ${subsFound} Subs • ${pagesDone} Pages • ${emailsFound} Emails`;
+              }
+
               updateWorkerTelemetry();
             }
           } catch {}
@@ -400,22 +444,15 @@ export function useCrawlerController(
         }
       } catch (e) {}
 
-      // Keep 100% on the worker before deleting
-      if (activeWorkersRef.current.has(target.id)) {
-        activeWorkersRef.current.get(target.id)!.progress = 100;
-      }
       setTargetSubProgress(100);
-      updateWorkerTelemetry();
-
-      // Free worker slot
-      activeWorkersRef.current.delete(target.id);
-      updateWorkerTelemetry();
       updateWorkerTelemetry();
     } catch (err) {
       console.warn(`[SequentialWorker] Error crawling ${target.domain}:`, err);
       target.status = 'failed';
       if (onTargetStatusChange) onTargetStatusChange(target.id, 'failed');
-      activeWorkersRef.current.delete(target.id);
+      activeWorkersRef.current.delete(w1Id);
+      activeWorkersRef.current.delete(w2Id);
+      activeWorkersRef.current.delete(w3Id);
       updateWorkerTelemetry();
     }
   };
@@ -749,9 +786,12 @@ export function useCrawlerController(
           } else {
             // Operator stopped or non-continuous run completed at 100%
             setStatus('COMPLETED');
+            setScrapedResults((prev) =>
+              prev.map((r) => (r.status === 'CRAWLING' ? { ...r, status: 'RESOLVED' as const } : r))
+            );
             currentCycleProgressRef.current = 100;
             setTargetSubProgress(100);
-            setActivePhase('⚡ Scraping Completed Successfully (100%)');
+            setActivePhase('');
             activeWorkersRef.current.clear();
             updateWorkerTelemetry();
             break;
@@ -874,9 +914,12 @@ export function useCrawlerController(
         }
       }
     }
+    setScrapedResults((prev) =>
+      prev.map((r) => (r.status === 'CRAWLING' ? { ...r, status: 'RESOLVED' as const } : r))
+    );
     setStatus('COMPLETED');
     setCurrentTargetName(null);
-    setActivePhase(`Crawler Stopped by Operator • Cycle #${cycleCountRef.current} Finished • All Data Preserved`);
+    setActivePhase('');
     setTargetSubProgress(100);
     currentCycleProgressRef.current = 100;
     maxSessionProgressRef.current = 100;

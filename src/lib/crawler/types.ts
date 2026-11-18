@@ -30,6 +30,7 @@ export interface ScrapedPhoneDetail {
 }
 
 export interface CrawlOptions {
+  cycle?: number;
   maxPages?: number;
   maxDepth?: number;
   delayMs?: number;

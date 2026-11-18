@@ -21,6 +21,7 @@ export async function POST(req: Request) {
     }
 
     const cleanDomain = domain.replace(/^https?:\/\//i, '').split('/')[0].trim().toLowerCase();
+    const cycle = Number(body.cycle) || 1;
     const maxPages = Number(body.max_pages || body.maxPages) || 15;
     const maxDepth = Number(body.max_depth || body.maxDepth) || 2;
     const requestsPerSecond = Number(body.requests_per_second || body.requestsPerSecond) || 1;
@@ -46,6 +47,7 @@ export async function POST(req: Request) {
         await redisQueue.updateJobStatus(job.id, 'running');
 
         const result = await crawlDomain(cleanDomain, {
+          cycle,
           maxPages,
           maxDepth,
           delayMs: Math.max(100, Math.floor(1000 / requestsPerSecond)),

@@ -320,25 +320,6 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
             >
               Cycle #{stats.cycleCount || 1}
             </span>
-            {stats.isContinuous && (
-              <span
-                style={{
-                  fontSize: '10.5px',
-                  fontWeight: 700,
-                  color: '#047857',
-                  background: '#d1fae5',
-                  padding: '2px 7px',
-                  borderRadius: '6px',
-                  border: '1px solid #a7f3d0',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}
-              >
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }} />
-                24/7 Non-Stop
-              </span>
-            )}
             <span>•</span>
             <span>
               {stats.isTldZoneActive
@@ -353,7 +334,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                 </span>
               </>
             )}
-            {stats.activeTargetPhase && (
+            {status === 'RUNNING' && stats.activeTargetPhase && (
               <span
                 style={{
                   fontSize: '11px',
@@ -483,7 +464,7 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
                       border: '1px solid #bae6fd',
                     }}
                   >
-                    <span>⚡ Subdomain Recon: {worker.subTarget}</span>
+                    <span>⚡ {worker.subTarget}</span>
                     {typeof worker.subIndex === 'number' && typeof worker.totalSubTargets === 'number' && (
                       <span style={{ color: '#0284c7', fontWeight: 700 }}>
                         ({worker.subIndex}/{worker.totalSubTargets})
