@@ -107,12 +107,12 @@ export default function DashboardPage() {
           const seenDomains = new Set<string>();
           const deduplicated: TargetItem[] = [];
           for (const item of parsed) {
-            // ONLY restore targets that are genuinely pending! (Drop any old 'cancelled' or 'completed' items)
+            // ONLY restore targets that are genuinely pending or actively crawling! (Drop any old 'cancelled' or 'completed' items)
             if (
               item &&
               item.id &&
               item.domain &&
-              (!item.status || item.status === 'pending') &&
+              (!item.status || item.status === 'pending' || item.status === 'crawling') &&
               !seenIds.has(item.id) &&
               !seenDomains.has(item.domain.toLowerCase())
             ) {

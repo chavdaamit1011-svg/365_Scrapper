@@ -10,6 +10,7 @@ import {
 } from '../types/crawler.types';
 
 const STORAGE_KEY_RESULTS = 'the_scrapper_scraped_results';
+const STORAGE_KEY_SESSION_STATE = 'the_scrapper_crawler_session_state';
 // Dedicated inline Web Worker for unthrottled timing immune to Chrome inactive tab clamping
 let sharedTimerWorker: Worker | null = null;
 const pendingSleeps = new Map<number, () => void>();
@@ -125,6 +126,11 @@ export function useCrawlerController(
     targetsRef.current = targets;
   }, [targets]);
 
+  const statusRef = useRef<CrawlerExecutionState>(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
   const isCancelledRef = useRef<boolean>(false);
   const isPausedRef = useRef<boolean>(false);
   const elapsedTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -140,6 +146,37 @@ export function useCrawlerController(
     if (!startTimeRef.current) return 0;
     return pausedElapsedRef.current + Math.max(0, Math.floor((Date.now() - startTimeRef.current) / 1000));
   }, [status]);
+
+  // Persist live session state to localStorage for seamless refresh resilience
+  const persistSessionState = useCallback(
+    (overrideState?: Partial<{
+      status: CrawlerExecutionState;
+      startTimeMs: number | null;
+      pausedElapsed: number;
+      cycleCount: number;
+      currentTargetName: string | null;
+      isContinuous: boolean;
+    }>) => {
+      try {
+        const curStatus = overrideState?.status || statusRef.current;
+        if (curStatus === 'RUNNING' || curStatus === 'PAUSED') {
+          const payload = {
+            status: curStatus,
+            startTimeMs: overrideState?.startTimeMs !== undefined ? overrideState.startTimeMs : startTimeRef.current,
+            pausedElapsed: overrideState?.pausedElapsed !== undefined ? overrideState.pausedElapsed : pausedElapsedRef.current,
+            cycleCount: overrideState?.cycleCount !== undefined ? overrideState.cycleCount : cycleCountRef.current,
+            currentTargetName: overrideState?.currentTargetName !== undefined ? overrideState.currentTargetName : currentTargetName,
+            isContinuous: overrideState?.isContinuous !== undefined ? overrideState.isContinuous : isContinuousMode,
+            updatedAt: Date.now(),
+          };
+          localStorage.setItem(STORAGE_KEY_SESSION_STATE, JSON.stringify(payload));
+        } else {
+          localStorage.removeItem(STORAGE_KEY_SESSION_STATE);
+        }
+      } catch (e) {}
+    },
+    [currentTargetName, isContinuousMode]
+  );
 
   // Fetch fresh results from MongoDB API
   const fetchMongoResults = useCallback(async () => {
@@ -458,27 +495,49 @@ export function useCrawlerController(
       }
       if (isCancelledRef.current) return;
 
-      // 1. Enqueue job into backend Redis / Queue with cycle number
+      // 1. Enqueue job into backend Redis / Queue with cycle number (with seamless re-attachment)
       let jobId: string | null = null;
+
+      // Re-attachment check: Verify if an active crawl job is already running on backend for this domain
       try {
-        const jobRes = await fetch('/api/crawl-jobs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            domain: target.domain,
-            cycle,
-            is_explicit: true,
-            skip_subdomains: false,
-            max_pages: interactiveMaxPages,
-            max_depth: interactiveMaxDepth,
-            requests_per_second: 1,
-            respect_robots_txt: true,
-          }),
-        });
-        const jobJson = await jobRes.json();
-        jobId = jobJson.job_id;
-      } catch (postErr) {
-        console.warn(`[SequentialWorker] Enqueue failed for ${target.domain}:`, postErr);
+        const checkRes = await fetch('/api/crawl-jobs');
+        if (checkRes.ok) {
+          const checkJson = await checkRes.json();
+          if (Array.isArray(checkJson.jobs)) {
+            const activeJob = checkJson.jobs.find(
+              (j: any) =>
+                j.domain?.toLowerCase() === target.domain.toLowerCase() &&
+                (j.status === 'running' || j.status === 'queued')
+            );
+            if (activeJob) {
+              jobId = activeJob.id;
+              console.log(`[useCrawlerController] Re-attached to running background crawl job: ${jobId}`);
+            }
+          }
+        }
+      } catch (e) {}
+
+      if (!jobId) {
+        try {
+          const jobRes = await fetch('/api/crawl-jobs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              domain: target.domain,
+              cycle,
+              is_explicit: true,
+              skip_subdomains: false,
+              max_pages: interactiveMaxPages,
+              max_depth: interactiveMaxDepth,
+              requests_per_second: 1,
+              respect_robots_txt: true,
+            }),
+          });
+          const jobJson = await jobRes.json();
+          jobId = jobJson.job_id;
+        } catch (postErr) {
+          console.warn(`[SequentialWorker] Enqueue failed for ${target.domain}:`, postErr);
+        }
       }
 
       if (activeWorkersRef.current.has(w1Id)) {
@@ -877,14 +936,27 @@ export function useCrawlerController(
         }
         if (isCancelledRef.current) break;
 
-        const currentTargets = targetsRef.current;
+        let currentTargets = targetsRef.current;
+        if (!currentTargets || currentTargets.length === 0) {
+          try {
+            const stored = localStorage.getItem('the_scrapper_targets_queue');
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (Array.isArray(parsed) && parsed.length > 0) {
+                currentTargets = parsed;
+                targetsRef.current = parsed;
+              }
+            }
+          } catch {}
+        }
         if (!currentTargets || currentTargets.length === 0) {
           await sleepUnthrottled(600);
           continue;
         }
 
-        // Find next target in queue (status !== 'crawling' && status !== 'completed')
-        let target = currentTargets.find((t) => !t.status || t.status === 'pending');
+        // Find next target in queue: prioritize actively crawling target (seamless re-attachment), then pending
+        let target = currentTargets.find((t) => t.status === 'crawling') ||
+                     currentTargets.find((t) => !t.status || t.status === 'pending');
 
         if (!target) {
           if (isContinuousMode) {
@@ -905,6 +977,10 @@ export function useCrawlerController(
             currentCycleProgressRef.current = 1;
             setTargetSubProgress(1);
             setProcessedTargetsCount(0);
+            persistSessionState({
+              status: 'RUNNING',
+              cycleCount: nextCycle,
+            });
 
             for (const t of currentTargets) {
               t.status = 'pending';
@@ -914,6 +990,10 @@ export function useCrawlerController(
           } else {
             // Operator stopped or non-continuous run completed at 100%
             setStatus('COMPLETED');
+            statusRef.current = 'COMPLETED';
+            try {
+              localStorage.removeItem(STORAGE_KEY_SESSION_STATE);
+            } catch (e) {}
             setScrapedResults((prev) =>
               prev.map((r) => (r.status === 'CRAWLING' ? { ...r, status: 'RESOLVED' as const } : r))
             );
@@ -927,6 +1007,12 @@ export function useCrawlerController(
         }
 
         if (!target) continue;
+
+        persistSessionState({
+          status: 'RUNNING',
+          currentTargetName: target.domain,
+          cycleCount: cycleCountRef.current,
+        });
 
         // Execute deep crawl or 24/7 TLD zone discovery for this target
         const isTldTarget = target.type === 'tld_zone' || target.domain.startsWith('.') || target.domain.startsWith('*.');
@@ -942,7 +1028,49 @@ export function useCrawlerController(
     } finally {
       isLoopRunningRef.current = false;
     }
-  }, [onTargetStatusChange, updateWorkerTelemetry]);
+  }, [onTargetStatusChange, updateWorkerTelemetry, persistSessionState]);
+
+  // Hydrate session & scraped results from Storage & Re-attach to Running Crawl on Mount / Refresh
+  useEffect(() => {
+    try {
+      const storedSessionRaw = localStorage.getItem(STORAGE_KEY_SESSION_STATE);
+      if (storedSessionRaw) {
+        const sess = JSON.parse(storedSessionRaw);
+        if (sess && (sess.status === 'RUNNING' || sess.status === 'PAUSED')) {
+          console.log('[useCrawlerController] Restoring active crawler session after page refresh:', sess);
+          setStatus(sess.status);
+          statusRef.current = sess.status;
+          setIsContinuousMode(sess.isContinuous !== undefined ? sess.isContinuous : true);
+          setCycleCount(sess.cycleCount || 1);
+          cycleCountRef.current = sess.cycleCount || 1;
+          pausedElapsedRef.current = sess.pausedElapsed || 0;
+
+          if (sess.status === 'RUNNING') {
+            startTimeRef.current = sess.startTimeMs || Date.now();
+            setElapsedSeconds(getWallClockElapsed());
+          } else {
+            startTimeRef.current = null;
+            setElapsedSeconds(sess.pausedElapsed || 0);
+          }
+
+          if (sess.currentTargetName) {
+            setCurrentTargetName(sess.currentTargetName);
+          }
+
+          // Seamless auto-resume on refresh if session was RUNNING
+          if (sess.status === 'RUNNING') {
+            isCancelledRef.current = false;
+            isPausedRef.current = false;
+            setTimeout(() => {
+              startWorkerLoop();
+            }, 100);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[useCrawlerController] Could not restore crawler session:', e);
+    }
+  }, [getWallClockElapsed, startWorkerLoop]);
 
   // START CRAWLER: Starts the continuous cycle engine
   const startCrawler = useCallback(
@@ -966,6 +1094,7 @@ export function useCrawlerController(
       isCancelledRef.current = false;
       isPausedRef.current = false;
       setStatus('RUNNING');
+      statusRef.current = 'RUNNING';
       setSessionTotal(queueToUse.length);
       setProcessedTargetsCount(0);
       setElapsedSeconds(0);
@@ -977,9 +1106,17 @@ export function useCrawlerController(
       currentCycleProgressRef.current = 1;
       maxSessionProgressRef.current = 1;
 
+      persistSessionState({
+        status: 'RUNNING',
+        startTimeMs: Date.now(),
+        pausedElapsed: 0,
+        cycleCount: 1,
+        currentTargetName: queueToUse[0]?.domain || null,
+      });
+
       startWorkerLoop();
     },
-    [startWorkerLoop, onTargetStatusChange]
+    [startWorkerLoop, onTargetStatusChange, persistSessionState]
   );
 
   // ENQUEUE TARGETS: Adds to queue and continues loop
@@ -1008,6 +1145,7 @@ export function useCrawlerController(
     startTimeRef.current = null;
     setElapsedSeconds(curElapsed);
     setStatus('PAUSED');
+    statusRef.current = 'PAUSED';
     for (const t of targetsRef.current) {
       if (t.status === 'crawling') {
         t.status = 'paused';
@@ -1017,13 +1155,19 @@ export function useCrawlerController(
       }
     }
     setActivePhase('Crawler Paused by Operator');
-  }, [onTargetStatusChange]);
+    persistSessionState({
+      status: 'PAUSED',
+      startTimeMs: null,
+      pausedElapsed: curElapsed,
+    });
+  }, [getWallClockElapsed, onTargetStatusChange, persistSessionState]);
 
   // RESUME CRAWLER
   const resumeCrawler = useCallback(() => {
     isPausedRef.current = false;
     isCancelledRef.current = false;
-    startTimeRef.current = Date.now();
+    const now = Date.now();
+    startTimeRef.current = now;
     for (const t of targetsRef.current) {
       if (t.status === 'paused') {
         t.status = 'crawling';
@@ -1033,10 +1177,15 @@ export function useCrawlerController(
       }
     }
     setStatus('RUNNING');
+    statusRef.current = 'RUNNING';
+    persistSessionState({
+      status: 'RUNNING',
+      startTimeMs: now,
+    });
     if (!isLoopRunningRef.current) {
       startWorkerLoop();
     }
-  }, [startWorkerLoop, onTargetStatusChange]);
+  }, [startWorkerLoop, onTargetStatusChange, persistSessionState]);
 
   // CANCEL CRAWLER: Operator manual stop
   const cancelCrawler = useCallback(() => {
@@ -1060,6 +1209,7 @@ export function useCrawlerController(
       prev.map((r) => (r.status === 'CRAWLING' ? { ...r, status: 'RESOLVED' as const } : r))
     );
     setStatus('COMPLETED');
+    statusRef.current = 'COMPLETED';
     setCurrentTargetName(null);
     setActivePhase('');
     setTargetSubProgress(100);
@@ -1067,9 +1217,13 @@ export function useCrawlerController(
     maxSessionProgressRef.current = 100;
     updateWorkerTelemetry();
 
+    try {
+      localStorage.removeItem(STORAGE_KEY_SESSION_STATE);
+    } catch (e) {}
+
     // Cancel active backend jobs so engine unblocks immediately
     fetch('/api/crawl-jobs/cancel', { method: 'POST' }).catch(() => {});
-  }, [onTargetStatusChange, updateWorkerTelemetry]);
+  }, [getWallClockElapsed, onTargetStatusChange, updateWorkerTelemetry]);
 
   // CLEAR RESULTS: Completely wipes React state, browser localStorage, MongoDB collections, and disk caches
   const clearResults = useCallback(async () => {
@@ -1080,6 +1234,10 @@ export function useCrawlerController(
 
     startTimeRef.current = null;
     pausedElapsedRef.current = 0;
+
+    try {
+      localStorage.removeItem(STORAGE_KEY_SESSION_STATE);
+    } catch (e) {}
 
     // 1. Immediately wipe all in-memory states
     setScrapedResults([]);
