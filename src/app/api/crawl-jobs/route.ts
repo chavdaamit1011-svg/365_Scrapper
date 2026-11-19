@@ -30,7 +30,8 @@ export async function POST(req: Request) {
     const isExplicitTarget = body.is_explicit !== undefined ? Boolean(body.is_explicit) : !tldZone;
     const skipSubdomainRecon = body.skip_subdomains !== undefined ? Boolean(body.skip_subdomains) : (!isExplicitTarget && Boolean(tldZone));
 
-    // 1. Enqueue job into Redis
+    // 1. Reset control state to RUNNING and enqueue job into Redis
+    await redisQueue.setControlState('RUNNING');
     const job = await redisQueue.enqueueCrawlJob({
       domain: cleanDomain,
       maxPages,

@@ -7,7 +7,6 @@ import { DorkingPersistenceService } from '@/modules/dorking/services/persistenc
 import { DorkingDiscoveryEngine } from '@/modules/dorking/engine/discoveryEngine';
 import { getSharedBloomFilter } from '@/lib/crawler/bloomFilter';
 import { classifySite } from '@/lib/crawler/siteClassifier';
-import { getCrawlerDaemon } from '@/lib/crawler/crawlerDaemon';
 
 export const dynamic = 'force-dynamic';
 
@@ -302,13 +301,6 @@ export async function DELETE() {
   let mongoConnected = false;
 
   try {
-    // -1. Reset and stop Crawler Daemon
-    try {
-      getCrawlerDaemon().reset();
-    } catch (e) {
-      console.warn('[API] Failed to reset crawler daemon:', e);
-    }
-
     // 0. Stop all running dorking jobs in memory
     try {
       await DorkingDiscoveryEngine.getInstance().stopAllJobs();
