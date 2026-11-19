@@ -10,24 +10,12 @@ import {
 } from '../types/crawler.types';
 
 const STORAGE_KEY_RESULTS = 'the_scrapper_scraped_results';
-export const MAX_CONCURRENT_WORKERS = 1;
-
-interface ActiveWorkerData {
-  target: TargetItem;
-  jobId?: string;
-  subTarget?: string;
-  subIndex?: number;
-  totalSubTargets?: number;
-  progress: number;
-  pagesCrawled: number;
-  subdomainsCount: number;
-  emailsCount: number;
-  phase: string;
-}
+export const MAX_CONCURRENT_WORKERS = 3;
 
 export function useCrawlerController(
   targets: TargetItem[],
-  onTargetStatusChange?: (targetId: string, status: NonNullable<TargetItem['status']>) => void
+  onTargetStatusChange?: (targetId: string, status: NonNullable<TargetItem['status']>) => void,
+  onTargetsSync?: (targets: TargetItem[]) => void
 ) {
   const [status, setStatus] = useState<CrawlerExecutionState>('IDLE');
   const [scrapedResults, setScrapedResults] = useState<ScrapedDataRecord[]>([]);
@@ -50,26 +38,33 @@ export function useCrawlerController(
   const [cycleCount, setCycleCount] = useState<number>(1);
   const [liveSessionDomains, setLiveSessionDomains] = useState<string[]>([]);
   const liveSessionDomainsRef = useRef<Set<string>>(new Set());
-  const [zoneDiscoveredCount, setZoneDiscoveredCount] = useState<number>(0);
-  const zoneDiscoveredCountRef = useRef<number>(0);
-  const [zoneScannedCount, setZoneScannedCount] = useState<number>(0);
-  const zoneScannedCountRef = useRef<number>(0);
-  const currentCycleScannedCountRef = useRef<number>(0);
-  const currentCycleProgressRef = useRef<number>(1);
-  const currentCycleTotalCountRef = useRef<number>(0);
-  const maxSessionProgressRef = useRef<number>(0);
 
-  // Pool of Concurrent Active Workers (Up to MAX_CONCURRENT_WORKERS = 3)
-  const activeWorkersRef = useRef<Map<string, ActiveWorkerData>>(new Map());
+  const [zoneDiscoveredCount, setZoneDiscoveredCount] = useState<number>(0);
+  const [zoneScannedCount, setZoneScannedCount] = useState<number>(0);
+  const [activeWorkersList, setActiveWorkersList] = useState<ActiveWorkerSummary[]>([]);
 
   const targetsRef = useRef<TargetItem[]>(targets);
   useEffect(() => {
     targetsRef.current = targets;
   }, [targets]);
 
-  const isCancelledRef = useRef<boolean>(false);
-  const isPausedRef = useRef<boolean>(false);
-  const elapsedTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const statusRef = useRef<CrawlerExecutionState>(status);
+  useEffect(() => {
+    statusRef.current = status;
+  }, [status]);
+
+  const cycleCountRef = useRef<number>(cycleCount);
+  useEffect(() => {
+    cycleCountRef.current = cycleCount;
+  }, [cycleCount]);
+
+  const scrapedResultsRef = useRef<ScrapedDataRecord[]>([]);
+  useEffect(() => {
+    scrapedResultsRef.current = scrapedResults;
+  }, [scrapedResults]);
+
+  // Dedicated Web Worker reference for 100% unthrottled timer execution in background tabs
+  const tickerWorkerRef = useRef<Worker | null>(null);
 
   // Fetch fresh results from MongoDB API
   const fetchMongoResults = useCallback(async () => {
@@ -107,776 +102,208 @@ export function useCrawlerController(
     return [];
   }, []);
 
-  // Hydrate scraped results from MongoDB on mount
+  // Sync state with Autonomous Backend Crawler Daemon
+  const syncWithDaemon = useCallback(async () => {
+    try {
+      const res = await fetch('/api/crawler/daemon', { cache: 'no-store' });
+      if (!res.ok) return;
+      const json = await res.json();
+      if (json.success && json.daemon) {
+        const d = json.daemon;
+
+        // If daemon is running or paused, adopt its authoritative status
+        if (d.status === 'RUNNING' || d.status === 'PAUSED') {
+          setStatus(d.status);
+          setCycleCount(d.cycleCount || 1);
+          setIsContinuousMode(d.isContinuous !== undefined ? d.isContinuous : true);
+          setCurrentTargetName(d.currentTargetName);
+          setActivePhase(d.activePhase || 'Autonomous Recon Active');
+          setTargetSubProgress(d.targetSubProgress || 0);
+          setElapsedSeconds(d.elapsedSeconds || 0);
+          setSessionTotal(d.sessionTotal || d.targets?.length || 0);
+          setProcessedTargetsCount(d.processedTargetsCount || 0);
+          setZoneDiscoveredCount(d.zoneDiscoveredCount || 0);
+          setZoneScannedCount(d.zoneScannedCount || 0);
+
+          if (Array.isArray(d.activeWorkersList)) {
+            setActiveWorkersList(d.activeWorkersList);
+          }
+          if (d.activeTargetResult) {
+            setActiveTargetResult(d.activeTargetResult);
+          }
+
+          if (d.currentTargetName) {
+            liveSessionDomainsRef.current.add(d.currentTargetName.toLowerCase());
+            setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
+          }
+
+          // If daemon has targets and client queue is empty or needs sync, notify parent
+          if (Array.isArray(d.targets) && d.targets.length > 0 && onTargetsSync) {
+            if (targetsRef.current.length === 0 || targetsRef.current.length !== d.targets.length) {
+              onTargetsSync(d.targets);
+            }
+          }
+        } else if (d.status === 'COMPLETED' && statusRef.current === 'RUNNING') {
+          setStatus('COMPLETED');
+          setActivePhase(d.activePhase || 'Completed');
+          setTargetSubProgress(100);
+          setActiveWorkersList([]);
+        }
+      }
+    } catch (err) {
+      // Ignore background sync transient errors
+    }
+  }, [onTargetsSync]);
+
+  // Initial Mount: Hydrate from MongoDB & Re-attach to Running Server Daemon
   useEffect(() => {
     fetchMongoResults();
-  }, [fetchMongoResults]);
+    syncWithDaemon();
+  }, [fetchMongoResults, syncWithDaemon]);
 
-  // Save to localStorage whenever scrapedResults change
+  // Unthrottled Web Worker Ticker Management
+  // Browsers throttle setInterval in inactive background tabs down to 1-60s.
+  // Dedicated Web Workers run on an independent OS thread and are NOT throttled.
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Inline worker creation via Blob
+    const workerCode = `
+      let timer = null;
+      self.onmessage = function(e) {
+        if (e.data === 'start') {
+          if (timer) clearInterval(timer);
+          timer = setInterval(function() {
+            self.postMessage('TICK');
+          }, 1000);
+        } else if (e.data === 'stop') {
+          if (timer) clearInterval(timer);
+          timer = null;
+        }
+      };
+    `;
+
     try {
-      if (scrapedResults.length > 0) {
-        localStorage.setItem(STORAGE_KEY_RESULTS, JSON.stringify(scrapedResults));
+      const blob = new Blob([workerCode], { type: 'application/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
+
+      worker.onmessage = (e) => {
+        if (e.data === 'TICK') {
+          if (statusRef.current === 'RUNNING') {
+            setElapsedSeconds((prev) => prev + 1);
+            // Polling interval: every second, sync telemetry from daemon
+            syncWithDaemon();
+          }
+        }
+      };
+
+      tickerWorkerRef.current = worker;
+
+      return () => {
+        worker.postMessage('stop');
+        worker.terminate();
+        URL.revokeObjectURL(workerUrl);
+        tickerWorkerRef.current = null;
+      };
+    } catch (workerErr) {
+      console.warn('Web Worker ticker not supported, falling back to standard interval:', workerErr);
+    }
+  }, [syncWithDaemon]);
+
+  // Start or Stop the Worker Ticker based on RUNNING status
+  useEffect(() => {
+    if (tickerWorkerRef.current) {
+      if (status === 'RUNNING') {
+        tickerWorkerRef.current.postMessage('start');
       } else {
-        localStorage.removeItem(STORAGE_KEY_RESULTS);
-      }
-    } catch (e) {}
-  }, [scrapedResults]);
-
-  const scrapedResultsRef = useRef<ScrapedDataRecord[]>([]);
-  useEffect(() => {
-    scrapedResultsRef.current = scrapedResults;
-  }, [scrapedResults]);
-
-  // Elapsed seconds timer while RUNNING
-  useEffect(() => {
-    if (status === 'RUNNING') {
-      elapsedTimerRef.current = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
-    } else {
-      if (elapsedTimerRef.current) {
-        clearInterval(elapsedTimerRef.current);
-        elapsedTimerRef.current = null;
+        tickerWorkerRef.current.postMessage('stop');
       }
     }
-
-    return () => {
-      if (elapsedTimerRef.current) {
-        clearInterval(elapsedTimerRef.current);
-      }
-    };
   }, [status]);
 
-  const cycleCountRef = useRef<number>(1);
+  // Results Periodic Refresh: Polls MongoDB every 3 seconds while crawling
   useEffect(() => {
-    cycleCountRef.current = cycleCount;
-  }, [cycleCount]);
+    if (status !== 'RUNNING' && status !== 'PAUSED') return;
 
-  const isLoopRunningRef = useRef<boolean>(false);
+    const interval = setInterval(() => {
+      fetchMongoResults();
+    }, 3000);
 
-  // Update aggregated telemetry across active worker
-  const updateWorkerTelemetry = useCallback(() => {
-    const workers = Array.from(activeWorkersRef.current.values());
-    if (workers.length === 0) {
-      if (targetsRef.current.length === 0 && !isCancelledRef.current && !isPausedRef.current) {
-        setCurrentTargetName(null);
-        setActivePhase('Standby');
+    return () => clearInterval(interval);
+  }, [status, fetchMongoResults]);
+
+  // Page Visibility API: When user switches back to this tab, immediately trigger instant refresh!
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        // Instant fast sync to reflect all scraping done while in background
+        syncWithDaemon();
+        fetchMongoResults();
       }
-      return;
-    }
-
-    const tldTarget = targetsRef.current.find((t) => t.type === 'tld_zone' || t.domain.startsWith('.'));
-    const primaryDomain = tldTarget ? tldTarget.domain : workers[0].target.domain;
-    setCurrentTargetName(primaryDomain);
-
-    const isTld = Boolean(tldTarget) || primaryDomain.startsWith('.');
-    const avgProgress = workers.length > 0
-      ? Math.round(workers.reduce((acc, w) => acc + (w.progress || 1), 0) / workers.length)
-      : 1;
-
-    // For single targets, worker average drives sub-progress.
-    // For TLD zones, currentCycleProgressRef strictly drives progress smoothly.
-    if (!isTld) {
-      setTargetSubProgress(avgProgress);
-    }
-
-    let totalSubs = 0;
-    let totalEms = 0;
-    let totalPhs = 0;
-    let totalPgs = 0;
-
-    if (isTld) {
-      const tldClean = primaryDomain.toLowerCase().trim();
-      const zDomains = scrapedResultsRef.current.filter((r) => {
-        if (r.isTldZone || r.isExplicitTarget) return false;
-        const rTld = r.tldZone ? (r.tldZone.startsWith('.') ? r.tldZone : '.' + r.tldZone).toLowerCase() : '';
-        return rTld === tldClean || r.domain.toLowerCase().endsWith(tldClean);
-      });
-      const zSubs = zDomains.reduce((acc, curr) => {
-        if (Array.isArray(curr.subdomains)) {
-          return acc + curr.subdomains.filter((s) => s.toLowerCase() !== curr.domain.toLowerCase()).length;
-        }
-        return acc + (curr.subdomainCount || 0);
-      }, 0);
-      const zEms = zDomains.reduce((acc, curr) => acc + (curr.emails?.length || (curr.email ? 1 : 0)), 0);
-      const zPhs = zDomains.reduce((acc, curr) => acc + (curr.phones?.length || 0), 0);
-      const zPgs = zDomains.reduce((acc, curr) => acc + (curr.pagesCrawled || curr.crawledPages?.length || 0), 0);
-
-      totalSubs = zSubs;
-      totalEms = zEms;
-      totalPhs = zPhs;
-      totalPgs = zPgs;
-    } else {
-      // Group by target domain to avoid tripling metrics across parallel pipeline workers
-      const domainMetrics = new Map<string, { subs: number; ems: number; pgs: number; phs: number }>();
-      for (const w of workers) {
-        const dom = (w.target.domain || '').toLowerCase().trim();
-        const existing = domainMetrics.get(dom) || { subs: 0, ems: 0, pgs: 0, phs: 0 };
-        domainMetrics.set(dom, {
-          subs: Math.max(existing.subs, w.subdomainsCount || 0),
-          ems: Math.max(existing.ems, w.emailsCount || 0),
-          pgs: Math.max(existing.pgs, w.pagesCrawled || 0),
-          phs: 0,
-        });
-      }
-
-      totalSubs = Array.from(domainMetrics.values()).reduce((acc, m) => acc + m.subs, 0);
-      totalEms = Array.from(domainMetrics.values()).reduce((acc, m) => acc + m.ems, 0);
-      totalPgs = Array.from(domainMetrics.values()).reduce((acc, m) => acc + m.pgs, 0);
-
-      const currentDoc = scrapedResultsRef.current.find((r) => r.domain.toLowerCase() === primaryDomain.toLowerCase());
-      if (currentDoc) {
-        if (totalSubs === 0 && currentDoc.subdomains) {
-          totalSubs = currentDoc.subdomains.length;
-        } else if (currentDoc.subdomainCount && currentDoc.subdomainCount > totalSubs) {
-          totalSubs = currentDoc.subdomainCount;
-        }
-        if (totalEms === 0 && currentDoc.emails) {
-          totalEms = currentDoc.emails.length;
-        }
-        if (currentDoc.phones) {
-          totalPhs = currentDoc.phones.length;
-        }
-        if (totalPgs === 0 && (currentDoc.pagesCrawled || currentDoc.crawledPages)) {
-          totalPgs = currentDoc.pagesCrawled || currentDoc.crawledPages?.length || 0;
-        }
-      }
-    }
-
-    setActiveTargetResult({
-      subdomains: totalSubs,
-      emails: totalEms,
-      phones: totalPhs,
-      pages: totalPgs,
-    });
-
-    if (isTld) {
-      const activeDomainsList = workers.map((w) => (w as any).activeSubTarget || w.target.domain).filter(Boolean);
-      if (activeDomainsList.length > 1) {
-        setActivePhase(
-          `⚡ [${activeDomainsList.length} Parallel Workers Active] Cataloging main domains: ${activeDomainsList.slice(0, 2).join(', ')}... (Cycle #${cycleCountRef.current})`
-        );
-      } else if (activeDomainsList.length === 1) {
-        setActivePhase(
-          `🌐 [${primaryDomain} Zone] Verifying main domain: ${activeDomainsList[0]} (Cycle #${cycleCountRef.current})`
-        );
-      } else {
-        setActivePhase(
-          `🌐 [${primaryDomain} Zone] Discovering root domains (Cycle #${cycleCountRef.current})`
-        );
-      }
-    } else {
-      setActivePhase(
-        `⚡ Deep Recon & Subdomains: ${primaryDomain} (Cycle #${cycleCountRef.current}) • ${totalSubs} Subdomains Discovered`
-      );
-    }
-  }, []);
-
-  // Sequential Worker Execution for a single target pass
-  const runSingleTargetCycle = async (target: TargetItem) => {
-    const cycle = cycleCountRef.current || 1;
-    const w1Id = `${target.id}_worker1`;
-    const w2Id = `${target.id}_worker2`;
-    const w3Id = `${target.id}_worker3`;
-
-    // Retain baseline intelligence across continuous cycles (cycle > 1) so worker slot never blinks to 0.
-    // On Cycle 1 (a fresh target crawl), strictly start at 0 so the crawl progress and pages are 100% genuine!
-    const existingDoc = scrapedResultsRef.current.find(
-      (r) => r.domain.toLowerCase() === target.domain.toLowerCase()
-    );
-    const existingW1 = activeWorkersRef.current.get(w1Id);
-    const baselineSubs = cycle > 1 ? Math.max(
-      existingDoc?.subdomains?.length || 0,
-      existingDoc?.subdomainCount || 0,
-      existingW1?.subdomainsCount || 0
-    ) : 0;
-    const baselinePages = cycle > 1 ? Math.max(
-      existingDoc?.pagesCrawled || 0,
-      existingDoc?.crawledPages?.length || 0,
-      existingW1?.pagesCrawled || 0
-    ) : 0;
-    const baselineEmails = cycle > 1 ? Math.max(
-      existingDoc?.emails?.length || 0,
-      existingW1?.emailsCount || 0
-    ) : 0;
-
-    // 3 Specialized Pipeline Workers: Scraper -> Deduplicator/Filter -> Live Dashboard Streamer
-    activeWorkersRef.current.set(w1Id, {
-      target,
-      progress: 10,
-      pagesCrawled: baselinePages,
-      subdomainsCount: baselineSubs,
-      emailsCount: baselineEmails,
-      subTarget: 'Active Discovery & Web Crawler',
-      phase: `⚡ [Worker #1: Scraper] Crawling ${target.domain} & live web pages (Cycle #${cycle})`,
-    });
-
-    activeWorkersRef.current.set(w2Id, {
-      target,
-      progress: 10,
-      pagesCrawled: baselinePages,
-      subdomainsCount: baselineSubs,
-      emailsCount: baselineEmails,
-      subTarget: 'Deduplication & Noise Filter',
-      phase: `🛡️ [Worker #2: Filter] Deduplicating & Normalizing • Cycle #${cycle}`,
-    });
-
-    activeWorkersRef.current.set(w3Id, {
-      target,
-      progress: 10,
-      pagesCrawled: baselinePages,
-      subdomainsCount: baselineSubs,
-      emailsCount: baselineEmails,
-      subTarget: 'Live Dashboard Streamer',
-      phase: `📡 [Worker #3: Syncer] Live telemetry streaming • Cycle #${cycle} active`,
-    });
-
-    target.status = 'crawling';
-    if (onTargetStatusChange) {
-      onTargetStatusChange(target.id, 'crawling');
-    }
-
-    liveSessionDomainsRef.current.add(target.domain.toLowerCase());
-    setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
-    setCurrentTargetName(target.domain);
-
-    setTargetSubProgress(10);
-    updateWorkerTelemetry();
-
-    const interactiveMaxPages = 15;
-    const interactiveMaxDepth = 3;
-
-    try {
-      if (isCancelledRef.current) return;
-
-      while (isPausedRef.current && !isCancelledRef.current) {
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (isCancelledRef.current) return;
-
-      // 1. Enqueue job into backend Redis / Queue with cycle number
-      let jobId: string | null = null;
-      try {
-        const jobRes = await fetch('/api/crawl-jobs', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            domain: target.domain,
-            cycle,
-            is_explicit: true,
-            skip_subdomains: false,
-            max_pages: interactiveMaxPages,
-            max_depth: interactiveMaxDepth,
-            requests_per_second: 1,
-            respect_robots_txt: true,
-          }),
-        });
-        const jobJson = await jobRes.json();
-        jobId = jobJson.job_id;
-      } catch (postErr) {
-        console.warn(`[SequentialWorker] Enqueue failed for ${target.domain}:`, postErr);
-      }
-
-      if (activeWorkersRef.current.has(w1Id)) {
-        activeWorkersRef.current.get(w1Id)!.jobId = jobId || undefined;
-      }
-
-      // 2. Poll job status until completed
-      let isDone = false;
-      let pollAttempts = 0;
-      const maxPollAttempts = 150; // Up to 120 seconds max
-
-      while (
-        !isDone &&
-        pollAttempts < maxPollAttempts &&
-        !isCancelledRef.current &&
-        !isPausedRef.current
-      ) {
-        await new Promise((r) => setTimeout(r, 800));
-        pollAttempts++;
-
-        if (jobId) {
-          try {
-            const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
-            const statusJson = await statusRes.json();
-            if (statusJson.success && statusJson.job) {
-              const j = statusJson.job;
-              if (j.status === 'completed' || j.status === 'failed') {
-                isDone = true;
-              }
-
-              const pagesDone = Math.max(baselinePages, j.pagesCrawled || 0);
-              const subsFound = Math.max(baselineSubs, j.subdomainsCount || 0);
-              const emailsFound = Math.max(baselineEmails, j.emailsCount || 0);
-
-              const w1 = activeWorkersRef.current.get(w1Id);
-              if (w1) {
-                w1.pagesCrawled = pagesDone;
-                w1.subdomainsCount = subsFound;
-                w1.emailsCount = emailsFound;
-                w1.progress = isDone ? 100 : Math.min(95, Math.max(10, Math.round((pagesDone / interactiveMaxPages) * 70) + 15));
-                w1.phase = isDone
-                  ? `✅ [Worker #1] Finished crawling ${pagesDone} pages (Cycle #${cycle})`
-                  : pagesDone > 0
-                  ? `⚡ [Worker #1: Scraper] Crawling pages (${pagesDone}/${interactiveMaxPages}) • Extracting links & subdomains`
-                  : `⚡ [Worker #1: Scraper] Resolving DNS & OSINT discovery (${subsFound} found)...`;
-              }
-
-              const w2 = activeWorkersRef.current.get(w2Id);
-              if (w2) {
-                w2.pagesCrawled = pagesDone;
-                w2.subdomainsCount = subsFound;
-                w2.emailsCount = emailsFound;
-                w2.progress = isDone ? 100 : Math.min(95, Math.max(15, Math.round((pagesDone / interactiveMaxPages) * 75) + 20));
-                w2.phase = isDone
-                  ? `✅ [Worker #2] Deduplication verified • Clean records saved`
-                  : `🛡️ [Worker #2: Filter] Normalizing & Deduplicating: ${subsFound} subdomains verified (0 duplicates)`;
-              }
-
-              const w3 = activeWorkersRef.current.get(w3Id);
-              if (w3) {
-                w3.pagesCrawled = pagesDone;
-                w3.subdomainsCount = subsFound;
-                w3.emailsCount = emailsFound;
-                w3.progress = isDone ? 100 : Math.min(95, Math.max(10, Math.round((pagesDone / interactiveMaxPages) * 65) + 10));
-                w3.phase = isDone
-                  ? `✅ [Worker #3] Cycle #${cycle} synchronized to Dashboard`
-                  : `📡 [Worker #3: Syncer] Live Stream: ${subsFound} Subs • ${pagesDone} Pages • ${emailsFound} Emails`;
-              }
-
-              updateWorkerTelemetry();
-            }
-          } catch {}
-        }
-
-        // Live database sync every 3 polls (~2.4s)
-        if (pollAttempts % 3 === 0) {
-          try {
-            const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-            const liveJson = await liveRes.json();
-            if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
-              setScrapedResults(liveJson.data);
-            }
-          } catch {}
-        }
-      }
-
-      if (isCancelledRef.current) return;
-
-      // Mark this cycle pass completed for this target
-      target.status = 'completed';
-      if (onTargetStatusChange) {
-        onTargetStatusChange(target.id, 'completed');
-      }
-      setProcessedTargetsCount((prev) => prev + 1);
-
-      // Refresh final database results
-      try {
-        const freshRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-        const freshJson = await freshRes.json();
-        if (freshJson.success && Array.isArray(freshJson.data) && freshJson.data.length > 0) {
-          setScrapedResults(freshJson.data);
-        }
-      } catch (e) {}
-
-      setTargetSubProgress(100);
-      updateWorkerTelemetry();
-    } catch (err) {
-      console.warn(`[SequentialWorker] Error crawling ${target.domain}:`, err);
-      target.status = 'failed';
-      if (onTargetStatusChange) onTargetStatusChange(target.id, 'failed');
-      activeWorkersRef.current.delete(w1Id);
-      activeWorkersRef.current.delete(w2Id);
-      activeWorkersRef.current.delete(w3Id);
-      updateWorkerTelemetry();
-    }
-  };
-
-  // 24/7 TLD Zone Discovery & Continuous Scraping Execution with 3-Worker Parallel Pool
-  const runTldZoneTargetCycle = async (target: TargetItem) => {
-    target.status = 'crawling';
-    if (onTargetStatusChange) {
-      onTargetStatusChange(target.id, 'crawling');
-    }
-    liveSessionDomainsRef.current.add(target.domain.toLowerCase());
-    setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
-    setCurrentTargetName(target.domain);
-
-    const CONCURRENT_WORKERS = 3;
-    let zoneCycle = cycleCountRef.current || 1;
-
-    try {
-      // Non-stop 24/7 continuous discovery & scraping loop until user hits Stop Crawler
-      while (!isCancelledRef.current) {
-        try {
-          while (isPausedRef.current && !isCancelledRef.current) {
-            await new Promise((r) => setTimeout(r, 400));
-          }
-          if (isCancelledRef.current) break;
-
-          // 1. Trigger TLD Discovery API (Certificate Transparency, Dorking, Seeds, Cross-Links)
-          const discRes = await fetch('/api/crawler/tld-discover', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              tld: target.domain,
-              cycle: zoneCycle,
-              maxPerPass: 250,
-            }),
-          });
-
-          const discJson = await discRes.json();
-          const rawDiscoveredList: string[] = Array.isArray(discJson.domains) ? discJson.domains : [];
-
-          // Normalize discovered list: collapse *.gov.in -> gov.in only when scraping generic .in zone
-          const isBroadIndiaTld = target.domain === '.in' || target.domain === '*.in' || target.domain === 'in';
-          const discoveredList: string[] = [];
-          const seenDom = new Set<string>();
-
-          for (const rawD of rawDiscoveredList) {
-            let norm = (rawD || '').toLowerCase().trim();
-            if (isBroadIndiaTld) {
-              if (norm !== 'gov.in' && norm.endsWith('.gov.in')) norm = 'gov.in';
-              else if (norm !== 'nic.in' && norm.endsWith('.nic.in')) norm = 'nic.in';
-            }
-            if (norm && !seenDom.has(norm)) {
-              seenDom.add(norm);
-              discoveredList.push(norm);
-            }
-          }
-
-          // Track true total discovered root domains across the active zone
-          const totalDiscoveredSoFar = Math.max(discJson.totalDiscovered || 0, discoveredList.length);
-          zoneDiscoveredCountRef.current = totalDiscoveredSoFar;
-          setZoneDiscoveredCount(totalDiscoveredSoFar);
-
-          // Immediately refresh results so user sees all discovered root domains right away
-          try {
-            const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-            const liveJson = await liveRes.json();
-            if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
-              setScrapedResults(liveJson.data);
-            }
-          } catch {}
-
-          // 2. Parallel Multi-Worker Concurrency Pool (3 Concurrency Slots)
-          let queueIndex = 0;
-          let completedInCycle = 0;
-          const totalInCycle = Math.max(1, discoveredList.length);
-          currentCycleTotalCountRef.current = totalInCycle;
-          currentCycleScannedCountRef.current = 0;
-          setZoneScannedCount(0);
-          currentCycleProgressRef.current = 1;
-          setTargetSubProgress(1);
-
-          const runWorker = async (slotIdx: number) => {
-            const workerKey = `${target.id}_worker_${slotIdx}`;
-
-            while (queueIndex < discoveredList.length && !isCancelledRef.current) {
-              while (isPausedRef.current && !isCancelledRef.current) {
-                await new Promise((r) => setTimeout(r, 400));
-              }
-              if (isCancelledRef.current) break;
-
-              const myIndex = queueIndex++;
-              if (myIndex >= discoveredList.length) break;
-              const subDomainTarget = discoveredList[myIndex];
-
-              liveSessionDomainsRef.current.add(subDomainTarget.toLowerCase());
-              setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
-
-              // Set live worker telemetry state in activeWorkersRef
-              activeWorkersRef.current.set(workerKey, {
-                target: {
-                  ...target,
-                  domain: subDomainTarget,
-                },
-                progress: 2,
-                pagesCrawled: 0,
-                subdomainsCount: 0,
-                emailsCount: 0,
-                phase: `⚡ Verifying Main Domain: ${subDomainTarget} (${myIndex + 1}/${discoveredList.length}) [Cycle #${zoneCycle}]`,
-                activeSubTarget: subDomainTarget,
-                activeSubIndex: myIndex + 1,
-                totalSubTargets: discoveredList.length,
-              } as any);
-              updateWorkerTelemetry();
-
-              // Enqueue rapid main domain verification (1-2s per domain, no deep subdomain crawl in TLD mode)
-              try {
-                const jobRes = await fetch('/api/crawl-jobs', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    domain: subDomainTarget,
-                    max_pages: 1,
-                    max_depth: 0,
-                    requests_per_second: 5,
-                    respect_robots_txt: true,
-                    tld_zone: target.domain,
-                    is_explicit: false,
-                    skip_subdomains: true,
-                  }),
-                });
-                const jobJson = await jobRes.json();
-                const jobId = jobJson.job_id;
-
-                // Rapid poll job status until done (up to 20 attempts ~6 seconds max)
-                let isDone = false;
-                let pollAttempts = 0;
-                while (!isDone && pollAttempts < 20 && !isCancelledRef.current && !isPausedRef.current) {
-                  await new Promise((r) => setTimeout(r, 300));
-                  pollAttempts++;
-                  if (jobId) {
-                    try {
-                      const statusRes = await fetch(`/api/crawl-jobs/${jobId}`);
-                      const statusJson = await statusRes.json();
-                      if (statusJson.success && statusJson.job) {
-                        const j = statusJson.job;
-                        if (j.status === 'completed' || j.status === 'failed') {
-                          isDone = true;
-                        }
-                        if (activeWorkersRef.current.has(workerKey)) {
-                          const w = activeWorkersRef.current.get(workerKey)!;
-                          w.subdomainsCount = j.subdomainsCount || 0;
-                          w.emailsCount = j.emailsCount || 0;
-                          w.pagesCrawled = j.pagesCrawled || 0;
-
-                          if (isDone) {
-                            w.progress = 100;
-                            w.phase = `✅ [Worker #${slotIdx + 1}] Main Domain: ${subDomainTarget} (Verified)`;
-                          } else {
-                            const reconTicks = Math.min(40, pollAttempts * 8);
-                            const pagesDone = j.pagesCrawled || 0;
-                            const pageBonus = pagesDone > 0 ? 50 : 0;
-                            w.progress = Math.min(95, Math.max(w.progress || 10, 10 + reconTicks + pageBonus));
-                            w.phase = `⚡ [Worker #${slotIdx + 1}] Main Domain: ${subDomainTarget} (Resolving...)`;
-                          }
-                        }
-
-                        // Strictly monotonic live cycle progress
-                        const activeWorkers = Array.from(activeWorkersRef.current.values());
-                        const workerSum = activeWorkers.reduce((acc, worker) => acc + (worker.progress || 0), 0);
-                        const workerFraction = activeWorkers.length > 0 ? workerSum / (activeWorkers.length * 100) : 0;
-                        const currentDone = Math.min(totalInCycle, completedInCycle + workerFraction);
-                        const rawPct = Math.min(99, Math.round((currentDone / totalInCycle) * 100));
-                        currentCycleProgressRef.current = Math.max(currentCycleProgressRef.current, Math.max(1, rawPct));
-                        setTargetSubProgress(currentCycleProgressRef.current);
-                        updateWorkerTelemetry();
-                      }
-                    } catch {}
-                  }
-
-                  // Live database sync every 3 polls (~1.2s)
-                  if (pollAttempts % 3 === 0) {
-                    try {
-                      const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-                      const liveJson = await liveRes.json();
-                      if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
-                        setScrapedResults(liveJson.data);
-                      }
-                    } catch {}
-                  }
-                }
-              } catch (subErr) {
-                console.warn(`[TldZoneWorker] Crawl job failed for ${subDomainTarget}:`, subErr);
-              }
-
-              completedInCycle++;
-              currentCycleScannedCountRef.current = completedInCycle;
-              setZoneScannedCount(completedInCycle);
-
-              // Update smooth cycle progress as domain completes
-              const activeWorkers = Array.from(activeWorkersRef.current.values());
-              const workerSum = activeWorkers.reduce((acc, worker) => acc + (worker.progress || 0), 0);
-              const workerFraction = activeWorkers.length > 0 ? workerSum / (activeWorkers.length * 100) : 0;
-              const currentDone = Math.min(totalInCycle, completedInCycle + workerFraction);
-              const rawPct = Math.min(99, Math.round((currentDone / totalInCycle) * 100));
-              currentCycleProgressRef.current = Math.max(currentCycleProgressRef.current, Math.max(1, rawPct));
-              setTargetSubProgress(currentCycleProgressRef.current);
-
-              // Database sync after each domain completes
-              try {
-                const liveRes = await fetch('/api/crawler/results', { cache: 'no-store' });
-                const liveJson = await liveRes.json();
-                if (liveJson.success && Array.isArray(liveJson.data) && liveJson.data.length > 0) {
-                  setScrapedResults(liveJson.data);
-                }
-              } catch {}
-            }
-
-            activeWorkersRef.current.delete(workerKey);
-            updateWorkerTelemetry();
-          };
-
-          // Run 3 workers in parallel concurrently!
-          await Promise.all([runWorker(0), runWorker(1), runWorker(2)]);
-
-          if (isCancelledRef.current) break;
-
-          // Milestone: Cycle reached 100% completion!
-          currentCycleProgressRef.current = 100;
-          setTargetSubProgress(100);
-          currentCycleScannedCountRef.current = totalInCycle;
-          setZoneScannedCount(totalInCycle);
-          setActivePhase(
-            `✅ Cycle #${zoneCycle} Complete (100%) • ${totalInCycle} Root Domains Scanned • Preparing Cycle #${zoneCycle + 1} Continuous Discovery...`
-          );
-          updateWorkerTelemetry();
-
-          // Wait 2000ms so the user sees 100% completed milestone clearly:
-          await new Promise((r) => setTimeout(r, 2000));
-          if (isCancelledRef.current) break;
-
-          // Advance to next autonomous cycle without stopping
-          zoneCycle++;
-          setCycleCount(zoneCycle);
-          cycleCountRef.current = zoneCycle;
-          currentCycleProgressRef.current = 1;
-          setTargetSubProgress(1);
-          currentCycleScannedCountRef.current = 0;
-          setZoneScannedCount(0);
-          setProcessedTargetsCount((prev) => prev + 1);
-
-          // Quick 1.5s interval before next continuous discovery pass
-          await new Promise((r) => setTimeout(r, 1500));
-        } catch (cycleErr) {
-          console.warn(`[TldZoneWorker] Cycle #${zoneCycle} error, continuing:`, cycleErr);
-          await new Promise((r) => setTimeout(r, 2000));
-        }
-      }
-
-      // Cleanup ONLY when user cancels / stops
-      target.status = 'completed';
-      if (onTargetStatusChange) onTargetStatusChange(target.id, 'completed');
-      activeWorkersRef.current.clear();
-      updateWorkerTelemetry();
-    } catch (err) {
-      console.warn(`[TldZoneWorker] Error in zone discovery for ${target.domain}:`, err);
-      target.status = 'completed';
-      if (onTargetStatusChange) onTargetStatusChange(target.id, 'completed');
-      activeWorkersRef.current.clear();
-      updateWorkerTelemetry();
-    }
-  };
-
-  // Continuous Worker Loop: runs indefinitely cycle-by-cycle until user clicks Cancel or Pause
-  const startWorkerLoop = useCallback(async () => {
-    if (isLoopRunningRef.current) return;
-    isLoopRunningRef.current = true;
-
-    try {
-      while (!isCancelledRef.current) {
-        // Handle PAUSED state
-        while (isPausedRef.current && !isCancelledRef.current) {
-          await new Promise((r) => setTimeout(r, 400));
-        }
-        if (isCancelledRef.current) break;
-
-        const currentTargets = targetsRef.current;
-        if (!currentTargets || currentTargets.length === 0) {
-          await new Promise((r) => setTimeout(r, 600));
-          continue;
-        }
-
-        // Find next target in queue (status !== 'crawling' && status !== 'completed')
-        let target = currentTargets.find((t) => !t.status || t.status === 'pending');
-
-        if (!target) {
-          if (isContinuousMode) {
-            // Milestone: Cycle is 100% completed across targets!
-            currentCycleProgressRef.current = 100;
-            setTargetSubProgress(100);
-            setActivePhase(
-              `✅ Cycle #${cycleCountRef.current} Complete (100%) • Continuous 24/7 Engine Active • Advancing to Cycle #${cycleCountRef.current + 1}...`
-            );
-            updateWorkerTelemetry();
-
-            await new Promise((r) => setTimeout(r, 2000));
-            if (isCancelledRef.current) break;
-
-            const nextCycle = cycleCountRef.current + 1;
-            setCycleCount(nextCycle);
-            cycleCountRef.current = nextCycle;
-            currentCycleProgressRef.current = 1;
-            setTargetSubProgress(1);
-            setProcessedTargetsCount(0);
-
-            for (const t of currentTargets) {
-              t.status = 'pending';
-              if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
-            }
-            target = currentTargets[0];
-          } else {
-            // Operator stopped or non-continuous run completed at 100%
-            setStatus('COMPLETED');
-            setScrapedResults((prev) =>
-              prev.map((r) => (r.status === 'CRAWLING' ? { ...r, status: 'RESOLVED' as const } : r))
-            );
-            currentCycleProgressRef.current = 100;
-            setTargetSubProgress(100);
-            setActivePhase('');
-            activeWorkersRef.current.clear();
-            updateWorkerTelemetry();
-            break;
-          }
-        }
-
-        if (!target) continue;
-
-        // Execute deep crawl or 24/7 TLD zone discovery for this target
-        const isTldTarget = target.type === 'tld_zone' || target.domain.startsWith('.') || target.domain.startsWith('*.');
-        if (isTldTarget) {
-          await runTldZoneTargetCycle(target);
-        } else {
-          await runSingleTargetCycle(target);
-        }
-
-        // 1s non-blocking interval before next target
-        await new Promise((r) => setTimeout(r, 1000));
-      }
-    } finally {
-      isLoopRunningRef.current = false;
-    }
-  }, [onTargetStatusChange, updateWorkerTelemetry]);
-
-  // START CRAWLER: Starts the continuous cycle engine
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [syncWithDaemon, fetchMongoResults]);
+
+  // START CRAWLER: Starts the server daemon and unthrottled loop
   const startCrawler = useCallback(
-    (overrideTargets?: TargetItem[] | unknown) => {
+    async (overrideTargets?: TargetItem[] | unknown) => {
       let queueToUse = targetsRef.current;
       if (Array.isArray(overrideTargets) && overrideTargets.length > 0) {
         queueToUse = overrideTargets;
         targetsRef.current = overrideTargets;
       }
 
-      if (queueToUse.length === 0 && activeWorkersRef.current.size === 0) {
-        return;
-      }
+      if (queueToUse.length === 0) return;
 
-      // Reset any non-crawling targets to pending
-      for (const t of queueToUse) {
-        t.status = 'pending';
-        if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
-      }
-
-      isCancelledRef.current = false;
-      isPausedRef.current = false;
+      // Optimistic local state update
       setStatus('RUNNING');
       setSessionTotal(queueToUse.length);
       setProcessedTargetsCount(0);
       setElapsedSeconds(0);
       setTargetSubProgress(1);
-      maxSessionProgressRef.current = 1;
+      setActivePhase('Initializing Autonomous Daemon...');
 
-      startWorkerLoop();
+      for (const t of queueToUse) {
+        t.status = 'pending';
+        if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
+      }
+
+      try {
+        const res = await fetch('/api/crawler/daemon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'start',
+            targets: queueToUse,
+            isContinuous: isContinuousMode,
+            cycle: cycleCountRef.current || 1,
+          }),
+        });
+        const json = await res.json();
+        if (json.success && json.daemon) {
+          const d = json.daemon;
+          setStatus(d.status);
+          setCycleCount(d.cycleCount || 1);
+          setCurrentTargetName(d.currentTargetName);
+          setActivePhase(d.activePhase);
+        }
+      } catch (err) {
+        console.error('[useCrawlerController] Error starting daemon:', err);
+      }
     },
-    [startWorkerLoop, onTargetStatusChange]
+    [isContinuousMode, onTargetStatusChange]
   );
 
-  // ENQUEUE TARGETS: Adds to queue and continues loop
+  // ENQUEUE TARGETS: Adds to running daemon queue
   const enqueueTargets = useCallback(
-    (newItems: TargetItem[]) => {
+    async (newItems: TargetItem[]) => {
       if (!newItems || newItems.length === 0) return;
       const existingIds = new Set(targetsRef.current.map((t) => t.id));
       const toAdd = newItems.filter((item) => !existingIds.has(item.id));
@@ -885,74 +312,83 @@ export function useCrawlerController(
       targetsRef.current = [...targetsRef.current, ...toAdd];
       setSessionTotal((prev) => prev + toAdd.length);
 
-      if (status === 'RUNNING' && !isLoopRunningRef.current) {
-        startWorkerLoop();
-      }
+      try {
+        await fetch('/api/crawler/daemon', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'enqueue',
+            targets: toAdd,
+          }),
+        });
+      } catch (e) {}
     },
-    [status, startWorkerLoop]
+    []
   );
 
   // PAUSE CRAWLER
-  const pauseCrawler = useCallback(() => {
-    isPausedRef.current = true;
+  const pauseCrawler = useCallback(async () => {
     setStatus('PAUSED');
+    setActivePhase('Crawler Paused by Operator');
     for (const t of targetsRef.current) {
       if (t.status === 'crawling') {
         t.status = 'paused';
-        if (onTargetStatusChange) {
-          onTargetStatusChange(t.id, 'paused');
-        }
+        if (onTargetStatusChange) onTargetStatusChange(t.id, 'paused');
       }
     }
-    setActivePhase('Crawler Paused by Operator');
+
+    try {
+      await fetch('/api/crawler/daemon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'pause' }),
+      });
+    } catch (e) {}
   }, [onTargetStatusChange]);
 
   // RESUME CRAWLER
-  const resumeCrawler = useCallback(() => {
-    isPausedRef.current = false;
-    isCancelledRef.current = false;
+  const resumeCrawler = useCallback(async () => {
+    setStatus('RUNNING');
+    setActivePhase(`Resuming Crawler • Cycle #${cycleCountRef.current}`);
     for (const t of targetsRef.current) {
       if (t.status === 'paused') {
-        t.status = 'crawling';
-        if (onTargetStatusChange) {
-          onTargetStatusChange(t.id, 'crawling');
-        }
+        t.status = 'pending';
+        if (onTargetStatusChange) onTargetStatusChange(t.id, 'pending');
       }
     }
-    setStatus('RUNNING');
-    if (!isLoopRunningRef.current) {
-      startWorkerLoop();
-    }
-  }, [startWorkerLoop, onTargetStatusChange]);
+
+    try {
+      await fetch('/api/crawler/daemon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'resume' }),
+      });
+    } catch (e) {}
+  }, [onTargetStatusChange]);
 
   // CANCEL CRAWLER: Operator manual stop
-  const cancelCrawler = useCallback(() => {
-    isCancelledRef.current = true;
-    isPausedRef.current = false;
-    isLoopRunningRef.current = false;
-    activeWorkersRef.current.clear();
+  const cancelCrawler = useCallback(async () => {
+    setStatus('COMPLETED');
+    setCurrentTargetName(null);
+    setActivePhase('Crawler Stopped');
+    setTargetSubProgress(100);
+    setActiveWorkersList([]);
+
     for (const t of targetsRef.current) {
       if (t.status === 'crawling' || t.status === 'paused' || t.status === 'pending') {
         t.status = 'completed';
-        if (onTargetStatusChange) {
-          onTargetStatusChange(t.id, 'completed');
-        }
+        if (onTargetStatusChange) onTargetStatusChange(t.id, 'completed');
       }
     }
-    setScrapedResults((prev) =>
-      prev.map((r) => (r.status === 'CRAWLING' ? { ...r, status: 'RESOLVED' as const } : r))
-    );
-    setStatus('COMPLETED');
-    setCurrentTargetName(null);
-    setActivePhase('');
-    setTargetSubProgress(100);
-    currentCycleProgressRef.current = 100;
-    maxSessionProgressRef.current = 100;
-    updateWorkerTelemetry();
 
-    // Cancel active backend jobs so engine unblocks immediately
-    fetch('/api/crawl-jobs/cancel', { method: 'POST' }).catch(() => {});
-  }, [onTargetStatusChange, updateWorkerTelemetry]);
+    try {
+      await fetch('/api/crawler/daemon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'stop' }),
+      });
+    } catch (e) {}
+  }, [onTargetStatusChange]);
 
   // CLEAR RESULTS: Completely wipes React state, browser localStorage, MongoDB collections, and disk caches
   const clearResults = useCallback(async () => {
@@ -973,17 +409,11 @@ export function useCrawlerController(
     setCycleCount(1);
     cycleCountRef.current = 1;
     setZoneDiscoveredCount(0);
-    zoneDiscoveredCountRef.current = 0;
     setZoneScannedCount(0);
-    zoneScannedCountRef.current = 0;
-    currentCycleTotalCountRef.current = 0;
-    currentCycleProgressRef.current = 0;
-    maxSessionProgressRef.current = 0;
-    setActivePhase('Purging Database & Caches...');
-    activeWorkersRef.current.clear();
+    setActiveWorkersList([]);
     targetsRef.current = [];
 
-    // 2. Clear all browser localStorage and sessionStorage caches (preserving only operator credentials)
+    // 2. Clear browser localStorage
     try {
       const authUser = localStorage.getItem('the_screpper_auth_user');
       localStorage.clear();
@@ -993,18 +423,11 @@ export function useCrawlerController(
       sessionStorage.clear();
     } catch (e) {}
 
-    // 3. Trigger permanent purge in MongoDB, Redis, Dorking & disk JSON
+    // 3. Trigger permanent purge in MongoDB, Redis, Dorking, and CrawlerDaemon
     try {
-      const res = await fetch('/api/crawler/results', { method: 'DELETE' });
-      const json = await res.json();
-      if (json.success) {
-        setActivePhase('Database & All Caches Purged Successfully');
-      } else {
-        setActivePhase('Standby');
-      }
+      await fetch('/api/crawler/results', { method: 'DELETE' });
     } catch (e) {
       console.warn('Backend purge error:', e);
-      setActivePhase('Standby');
     }
   }, [status]);
 
@@ -1022,28 +445,24 @@ export function useCrawlerController(
   );
   const databaseTotalCountries = new Set(scrapedResults.map((r) => r.country).filter(Boolean)).size;
 
-  const isTldZoneActive = Boolean(currentTargetName && (currentTargetName.startsWith('.') || currentTargetName.startsWith('*.')));
+  const isTldZoneActive = Boolean(
+    currentTargetName && (currentTargetName.startsWith('.') || currentTargetName.startsWith('*.'))
+  );
 
   // Calculate specific live metrics for active TLD zone scope
-  const activeZoneDomains = isTldZoneActive && currentTargetName
-    ? scrapedResults.filter((r) => {
-        if (r.isTldZone) return false;
-        if (r.isExplicitTarget) return false;
-        const cleanTarget = currentTargetName.replace(/^\*?\./, '').toLowerCase().trim();
-        const rTld = r.tldZone ? r.tldZone.replace(/^\*?\./, '').toLowerCase().trim() : '';
-        return rTld === cleanTarget || r.domain.toLowerCase().endsWith(`.${cleanTarget}`);
-      })
-    : [];
+  const activeZoneDomains =
+    isTldZoneActive && currentTargetName
+      ? scrapedResults.filter((r) => {
+          if (r.isTldZone) return false;
+          if (r.isExplicitTarget) return false;
+          const cleanTarget = currentTargetName.replace(/^\*?\./, '').toLowerCase().trim();
+          const rTld = r.tldZone ? r.tldZone.replace(/^\*?\./, '').toLowerCase().trim() : '';
+          return rTld === cleanTarget || r.domain.toLowerCase().endsWith(`.${cleanTarget}`);
+        })
+      : [];
 
-  const activeZoneRootDomains = currentCycleTotalCountRef.current > 0
-    ? currentCycleTotalCountRef.current
-    : Math.max(activeZoneDomains.length, zoneDiscoveredCount, zoneDiscoveredCountRef.current);
-
-  const activeZoneScannedDomains = zoneScannedCountRef.current > 0
-    ? zoneScannedCountRef.current
-    : activeZoneDomains.filter(
-        (r) => r.status === 'RESOLVED' || (Array.isArray(r.subdomains) && r.subdomains.length > 0) || (r.pagesCrawled && r.pagesCrawled > 0)
-      ).length;
+  const activeZoneRootDomains = Math.max(activeZoneDomains.length, zoneDiscoveredCount);
+  const activeZoneScannedDomains = zoneScannedCount > 0 ? zoneScannedCount : activeZoneDomains.length;
 
   const activeZoneSubdomains = activeZoneDomains.reduce((acc, curr) => {
     if (Array.isArray(curr.subdomains)) {
@@ -1057,58 +476,14 @@ export function useCrawlerController(
     0
   );
 
-  const activeZonePages = activeZoneDomains.reduce(
-    (acc, curr) => acc + (curr.pagesCrawled || curr.crawledPages?.length || 0),
-    0
-  );
+  const activeZonePhones = activeZoneDomains.reduce((acc, curr) => acc + (curr.phones?.length || 0), 0);
 
-  const activeZonePhones = activeZoneDomains.reduce(
-    (acc, curr) => acc + (curr.phones?.length || 0),
-    0
-  );
-
-  // Calculate strictly monotonic, glitch-free progress (0 to 100%)
-  const pendingTargetsCount = targetsRef.current.filter((t) => !t.status || t.status === 'pending').length;
-  const effectiveTotal = Math.max(sessionTotal, processedTargetsCount + activeWorkersRef.current.size + pendingTargetsCount);
-  let dynamicProgress = 0;
-  if (status === 'COMPLETED') {
-    dynamicProgress = 100;
-  } else if (status === 'RUNNING' || status === 'PAUSED') {
-    if (isTldZoneActive) {
-      dynamicProgress = Math.min(100, Math.max(1, currentCycleProgressRef.current || targetSubProgress || 1));
-    } else {
-      const totalTargets = Math.max(1, effectiveTotal);
-      const finishedFraction = (processedTargetsCount / totalTargets) * 100;
-      const activeTargetFraction = (targetSubProgress / totalTargets);
-      const calculatedPct = Math.round(finishedFraction + activeTargetFraction);
-      const targetVal = Math.max(1, Math.min(99, Math.max(targetSubProgress, calculatedPct)));
-      dynamicProgress = Math.max(1, Math.max(currentCycleProgressRef.current, targetVal));
-    }
-  } else if (status === 'CANCELLED') {
-    dynamicProgress = 0;
-  }
-
-  const activeWorkersList: ActiveWorkerSummary[] = Array.from(activeWorkersRef.current.entries()).map(
-    ([id, w]) => {
-      const isWorkerTld = w.target.type === 'tld_zone' || w.target.domain.startsWith('.');
-      return {
-        id,
-        domain: w.target.domain,
-        subTarget: (w as any).activeSubTarget,
-        subIndex: (w as any).activeSubIndex,
-        totalSubTargets: (w as any).totalSubTargets || (isWorkerTld ? activeZoneRootDomains : undefined),
-        progress: w.progress,
-        pagesCrawled: isWorkerTld && activeZonePages > 0 ? activeZonePages : w.pagesCrawled,
-        subdomainsCount: isWorkerTld && activeZoneSubdomains > 0 ? activeZoneSubdomains : w.subdomainsCount,
-        emailsCount: isWorkerTld && activeZoneEmails > 0 ? activeZoneEmails : w.emailsCount,
-        phase: w.phase,
-      };
-    }
-  );
+  // Dynamic progress percentage
+  const dynamicProgress = status === 'COMPLETED' ? 100 : Math.min(100, Math.max(status === 'RUNNING' ? 1 : 0, targetSubProgress));
 
   const stats: CrawlerStats = {
-    totalTargets: effectiveTotal,
-    processedTargets: status === 'COMPLETED' ? effectiveTotal : processedTargetsCount,
+    totalTargets: sessionTotal || targetsRef.current.length,
+    processedTargets: status === 'COMPLETED' ? (sessionTotal || targetsRef.current.length) : processedTargetsCount,
     subdomainsFound: databaseTotalSubdomains,
     emailsFound: databaseTotalEmails,
     countriesFound: databaseTotalCountries,
@@ -1120,7 +495,7 @@ export function useCrawlerController(
     activeTargetSubdomains: isTldZoneActive ? activeZoneSubdomains : (activeTargetResult ? activeTargetResult.subdomains : null),
     activeTargetEmails: isTldZoneActive ? activeZoneEmails : (activeTargetResult ? activeTargetResult.emails : null),
     activeTargetPhones: isTldZoneActive ? activeZonePhones : (activeTargetResult ? activeTargetResult.phones : null),
-    activeTargetPages: isTldZoneActive ? activeZonePages : (activeTargetResult ? activeTargetResult.pages : (activeWorkersList?.[0]?.pagesCrawled || null)),
+    activeTargetPages: activeTargetResult ? activeTargetResult.pages : (activeWorkersList?.[0]?.pagesCrawled || null),
     databaseTotalDomains,
     databaseTotalSubdomains,
     databaseTotalEmails,

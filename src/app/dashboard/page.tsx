@@ -67,8 +67,17 @@ export default function DashboardPage() {
     });
   }, []);
 
+  const handleTargetsSync = useCallback((synced: TargetItem[]) => {
+    if (Array.isArray(synced) && synced.length > 0) {
+      setTargets(synced);
+      try {
+        localStorage.setItem('the_scrapper_targets_queue', JSON.stringify(synced));
+      } catch (e) {}
+    }
+  }, []);
+
   // Crawler Controller Hook
-  const crawler = useCrawlerController(targets, handleTargetStatusChange);
+  const crawler = useCrawlerController(targets, handleTargetStatusChange, handleTargetsSync);
 
   // Strictly pending targets waiting in line to be crawled
   const pendingTargets = useMemo(() => {
