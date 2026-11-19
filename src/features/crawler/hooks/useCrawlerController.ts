@@ -10,6 +10,8 @@ import {
 } from '../types/crawler.types';
 
 const STORAGE_KEY_RESULTS = 'the_scrapper_scraped_results';
+const STORAGE_KEY_START_TIME = 'the_scrapper_crawler_start_time';
+const STORAGE_KEY_PAUSED_TIME = 'the_scrapper_crawler_paused_time';
 export const MAX_CONCURRENT_WORKERS = 3;
 
 export function useCrawlerController(
@@ -21,6 +23,10 @@ export function useCrawlerController(
   const [scrapedResults, setScrapedResults] = useState<ScrapedDataRecord[]>([]);
   const [elapsedSeconds, setElapsedSeconds] = useState<number>(0);
   const [currentTargetName, setCurrentTargetName] = useState<string | null>(null);
+
+  // Wall-Clock Time Tracking (Immune to Chrome tab sleep, background throttling, and tab switches)
+  const startTimeMsRef = useRef<number | null>(null);
+  const pausedElapsedRef = useRef<number>(0);
 
   // Granular session and telemetry state
   const [sessionTotal, setSessionTotal] = useState<number>(0);
@@ -65,6 +71,15 @@ export function useCrawlerController(
 
   // Dedicated Web Worker reference for 100% unthrottled timer execution in background tabs
   const tickerWorkerRef = useRef<Worker | null>(null);
+
+  // Pure Wall-Clock Elapsed Time Calculation
+  const getWallClockElapsed = useCallback(() => {
+    if (statusRef.current === 'PAUSED' || statusRef.current === 'COMPLETED' || statusRef.current === 'IDLE') {
+      return pausedElapsedRef.current;
+    }
+    if (!startTimeMsRef.current) return 0;
+    return pausedElapsedRef.current + Math.max(0, Math.floor((Date.now() - startTimeMsRef.current) / 1000));
+  }, []);
 
   // Fetch fresh results from MongoDB API
   const fetchMongoResults = useCallback(async () => {
@@ -111,7 +126,6 @@ export function useCrawlerController(
       if (json.success && json.daemon) {
         const d = json.daemon;
 
-        // If daemon is running or paused, adopt its authoritative status
         if (d.status === 'RUNNING' || d.status === 'PAUSED') {
           setStatus(d.status);
           setCycleCount(d.cycleCount || 1);
@@ -119,11 +133,23 @@ export function useCrawlerController(
           setCurrentTargetName(d.currentTargetName);
           setActivePhase(d.activePhase || 'Autonomous Recon Active');
           setTargetSubProgress(d.targetSubProgress || 0);
-          setElapsedSeconds(d.elapsedSeconds || 0);
           setSessionTotal(d.sessionTotal || d.targets?.length || 0);
           setProcessedTargetsCount(d.processedTargetsCount || 0);
           setZoneDiscoveredCount(d.zoneDiscoveredCount || 0);
           setZoneScannedCount(d.zoneScannedCount || 0);
+
+          // Synchronize wall-clock anchor with server's elapsed duration
+          if (d.status === 'RUNNING') {
+            if (!startTimeMsRef.current) {
+              const serverElapsed = d.elapsedSeconds || 0;
+              startTimeMsRef.current = Date.now() - serverElapsed * 1000;
+              pausedElapsedRef.current = 0;
+            }
+            setElapsedSeconds(getWallClockElapsed());
+          } else {
+            pausedElapsedRef.current = d.elapsedSeconds || 0;
+            setElapsedSeconds(pausedElapsedRef.current);
+          }
 
           if (Array.isArray(d.activeWorkersList)) {
             setActiveWorkersList(d.activeWorkersList);
@@ -137,7 +163,6 @@ export function useCrawlerController(
             setLiveSessionDomains(Array.from(liveSessionDomainsRef.current));
           }
 
-          // If daemon has targets and client queue is empty or needs sync, notify parent
           if (Array.isArray(d.targets) && d.targets.length > 0 && onTargetsSync) {
             if (targetsRef.current.length === 0 || targetsRef.current.length !== d.targets.length) {
               onTargetsSync(d.targets);
@@ -153,21 +178,31 @@ export function useCrawlerController(
     } catch (err) {
       // Ignore background sync transient errors
     }
-  }, [onTargetsSync]);
+  }, [getWallClockElapsed, onTargetsSync]);
 
-  // Initial Mount: Hydrate from MongoDB & Re-attach to Running Server Daemon
+  // Initial Mount: Hydrate from Storage & Re-attach to Running Server Daemon
   useEffect(() => {
     fetchMongoResults();
+
+    try {
+      const storedStart = localStorage.getItem(STORAGE_KEY_START_TIME);
+      const storedPaused = localStorage.getItem(STORAGE_KEY_PAUSED_TIME);
+      if (storedStart) {
+        startTimeMsRef.current = Number(storedStart);
+      }
+      if (storedPaused) {
+        pausedElapsedRef.current = Number(storedPaused);
+      }
+    } catch (e) {}
+
     syncWithDaemon();
   }, [fetchMongoResults, syncWithDaemon]);
 
   // Unthrottled Web Worker Ticker Management
-  // Browsers throttle setInterval in inactive background tabs down to 1-60s.
-  // Dedicated Web Workers run on an independent OS thread and are NOT throttled.
+  // Dedicated Web Worker runs on an isolated thread immune to Chrome's background tab throttling
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
-    // Inline worker creation via Blob
     const workerCode = `
       let timer = null;
       self.onmessage = function(e) {
@@ -188,12 +223,23 @@ export function useCrawlerController(
       const workerUrl = URL.createObjectURL(blob);
       const worker = new Worker(workerUrl);
 
+      let tickCounter = 0;
+
       worker.onmessage = (e) => {
         if (e.data === 'TICK') {
           if (statusRef.current === 'RUNNING') {
-            setElapsedSeconds((prev) => prev + 1);
-            // Polling interval: every second, sync telemetry from daemon
-            syncWithDaemon();
+            tickCounter++;
+            // Strictly calculate real wall-clock elapsed time
+            setElapsedSeconds(getWallClockElapsed());
+
+            // Poll daemon status every 2 seconds
+            if (tickCounter % 2 === 0) {
+              syncWithDaemon();
+            }
+            // Refresh results table every 3 seconds
+            if (tickCounter % 3 === 0) {
+              fetchMongoResults();
+            }
           }
         }
       };
@@ -209,7 +255,7 @@ export function useCrawlerController(
     } catch (workerErr) {
       console.warn('Web Worker ticker not supported, falling back to standard interval:', workerErr);
     }
-  }, [syncWithDaemon]);
+  }, [getWallClockElapsed, syncWithDaemon, fetchMongoResults]);
 
   // Start or Stop the Worker Ticker based on RUNNING status
   useEffect(() => {
@@ -222,24 +268,17 @@ export function useCrawlerController(
     }
   }, [status]);
 
-  // Results Periodic Refresh: Polls MongoDB every 3 seconds while crawling
-  useEffect(() => {
-    if (status !== 'RUNNING' && status !== 'PAUSED') return;
-
-    const interval = setInterval(() => {
-      fetchMongoResults();
-    }, 3000);
-
-    return () => clearInterval(interval);
-  }, [status, fetchMongoResults]);
-
-  // Page Visibility API: When user switches back to this tab, immediately trigger instant refresh!
+  // Page Visibility API: When user switches back to this tab (from Antigravity, etc.)
+  // Instantly re-calculate elapsed seconds using wall-clock time and fetch fresh data!
   useEffect(() => {
     if (typeof document === 'undefined') return;
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
-        // Instant fast sync to reflect all scraping done while in background
+        // Recalculate true elapsed seconds immediately
+        if (statusRef.current === 'RUNNING') {
+          setElapsedSeconds(getWallClockElapsed());
+        }
         syncWithDaemon();
         fetchMongoResults();
       }
@@ -249,9 +288,9 @@ export function useCrawlerController(
     return () => {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [syncWithDaemon, fetchMongoResults]);
+  }, [getWallClockElapsed, syncWithDaemon, fetchMongoResults]);
 
-  // START CRAWLER: Starts the server daemon and unthrottled loop
+  // START CRAWLER: Starts server daemon and begins unthrottled wall-clock loop
   const startCrawler = useCallback(
     async (overrideTargets?: TargetItem[] | unknown) => {
       let queueToUse = targetsRef.current;
@@ -262,7 +301,14 @@ export function useCrawlerController(
 
       if (queueToUse.length === 0) return;
 
-      // Optimistic local state update
+      const now = Date.now();
+      startTimeMsRef.current = now;
+      pausedElapsedRef.current = 0;
+      try {
+        localStorage.setItem(STORAGE_KEY_START_TIME, String(now));
+        localStorage.removeItem(STORAGE_KEY_PAUSED_TIME);
+      } catch (e) {}
+
       setStatus('RUNNING');
       setSessionTotal(queueToUse.length);
       setProcessedTargetsCount(0);
@@ -328,7 +374,16 @@ export function useCrawlerController(
 
   // PAUSE CRAWLER
   const pauseCrawler = useCallback(async () => {
+    const currentElapsed = getWallClockElapsed();
+    pausedElapsedRef.current = currentElapsed;
+    startTimeMsRef.current = null;
+    try {
+      localStorage.setItem(STORAGE_KEY_PAUSED_TIME, String(currentElapsed));
+      localStorage.removeItem(STORAGE_KEY_START_TIME);
+    } catch (e) {}
+
     setStatus('PAUSED');
+    setElapsedSeconds(currentElapsed);
     setActivePhase('Crawler Paused by Operator');
     for (const t of targetsRef.current) {
       if (t.status === 'crawling') {
@@ -344,10 +399,16 @@ export function useCrawlerController(
         body: JSON.stringify({ action: 'pause' }),
       });
     } catch (e) {}
-  }, [onTargetStatusChange]);
+  }, [getWallClockElapsed, onTargetStatusChange]);
 
   // RESUME CRAWLER
   const resumeCrawler = useCallback(async () => {
+    const now = Date.now();
+    startTimeMsRef.current = now;
+    try {
+      localStorage.setItem(STORAGE_KEY_START_TIME, String(now));
+    } catch (e) {}
+
     setStatus('RUNNING');
     setActivePhase(`Resuming Crawler • Cycle #${cycleCountRef.current}`);
     for (const t of targetsRef.current) {
@@ -368,6 +429,14 @@ export function useCrawlerController(
 
   // CANCEL CRAWLER: Operator manual stop
   const cancelCrawler = useCallback(async () => {
+    const currentElapsed = getWallClockElapsed();
+    pausedElapsedRef.current = currentElapsed;
+    startTimeMsRef.current = null;
+    try {
+      localStorage.removeItem(STORAGE_KEY_START_TIME);
+      localStorage.removeItem(STORAGE_KEY_PAUSED_TIME);
+    } catch (e) {}
+
     setStatus('COMPLETED');
     setCurrentTargetName(null);
     setActivePhase('Crawler Stopped');
@@ -388,7 +457,7 @@ export function useCrawlerController(
         body: JSON.stringify({ action: 'stop' }),
       });
     } catch (e) {}
-  }, [onTargetStatusChange]);
+  }, [getWallClockElapsed, onTargetStatusChange]);
 
   // CLEAR RESULTS: Completely wipes React state, browser localStorage, MongoDB collections, and disk caches
   const clearResults = useCallback(async () => {
@@ -396,6 +465,9 @@ export function useCrawlerController(
       alert('Please pause or cancel the crawler before clearing results.');
       return;
     }
+
+    startTimeMsRef.current = null;
+    pausedElapsedRef.current = 0;
 
     // 1. Immediately wipe all in-memory states
     setScrapedResults([]);

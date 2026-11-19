@@ -49,11 +49,14 @@ export class CrawlerDaemon {
   private currentTargetName: string | null = null;
   private activePhase: string = 'Standby';
   private targetSubProgress: number = 0;
-  private elapsedSeconds: number = 0;
   private targets: TargetItem[] = [];
   private sessionTotal: number = 0;
   private processedTargetsCount: number = 0;
   private startedAt: string | null = null;
+
+  // Real Wall-Clock time tracking (Immune to tab freezes, throttling, or sleep)
+  private startTimeMs: number | null = null;
+  private pausedElapsedSeconds: number = 0;
 
   private activeWorkers: Map<string, ActiveWorkerSummary> = new Map();
   private activeTargetResult: {
@@ -69,11 +72,18 @@ export class CrawlerDaemon {
   private currentCycleTotalCount: number = 0;
 
   private isLoopRunning: boolean = false;
-  private elapsedInterval: NodeJS.Timeout | null = null;
   private stateSaveTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     this.loadStateFromFile();
+  }
+
+  public getElapsedSeconds(): number {
+    if (!this.startTimeMs) return this.pausedElapsedSeconds || 0;
+    if (this.status === 'PAUSED' || this.status === 'COMPLETED' || this.status === 'IDLE') {
+      return this.pausedElapsedSeconds;
+    }
+    return this.pausedElapsedSeconds + Math.max(0, Math.floor((Date.now() - this.startTimeMs) / 1000));
   }
 
   private loadStateFromFile() {
@@ -88,7 +98,6 @@ export class CrawlerDaemon {
           this.currentTargetName = data.currentTargetName || null;
           this.activePhase = data.activePhase || 'Resuming Crawler Daemon...';
           this.targetSubProgress = data.targetSubProgress || 0;
-          this.elapsedSeconds = data.elapsedSeconds || 0;
           this.targets = Array.isArray(data.targets) ? data.targets : [];
           this.sessionTotal = data.sessionTotal || this.targets.length;
           this.processedTargetsCount = data.processedTargetsCount || 0;
@@ -97,9 +106,14 @@ export class CrawlerDaemon {
           this.zoneScannedCount = data.zoneScannedCount || 0;
           this.currentCycleProgress = data.currentCycleProgress || 1;
 
+          if (data.startTimeMs && this.status === 'RUNNING') {
+            this.startTimeMs = data.startTimeMs;
+            this.pausedElapsedSeconds = data.pausedElapsedSeconds || 0;
+          } else {
+            this.pausedElapsedSeconds = data.elapsedSeconds || 0;
+          }
+
           if (this.status === 'RUNNING') {
-            this.startElapsedTimer();
-            // Automatically resume autonomous execution on server restart!
             setTimeout(() => {
               if (this.status === 'RUNNING' && !this.isLoopRunning) {
                 this.runAutonomousLoop();
@@ -122,7 +136,9 @@ export class CrawlerDaemon {
         currentTargetName: this.currentTargetName,
         activePhase: this.activePhase,
         targetSubProgress: this.targetSubProgress,
-        elapsedSeconds: this.elapsedSeconds,
+        elapsedSeconds: this.getElapsedSeconds(),
+        startTimeMs: this.startTimeMs,
+        pausedElapsedSeconds: this.pausedElapsedSeconds,
         targets: this.targets,
         sessionTotal: this.sessionTotal,
         processedTargetsCount: this.processedTargetsCount,
@@ -145,22 +161,6 @@ export class CrawlerDaemon {
     }, 1500);
   }
 
-  private startElapsedTimer() {
-    if (this.elapsedInterval) clearInterval(this.elapsedInterval);
-    this.elapsedInterval = setInterval(() => {
-      if (this.status === 'RUNNING') {
-        this.elapsedSeconds++;
-      }
-    }, 1000);
-  }
-
-  private stopElapsedTimer() {
-    if (this.elapsedInterval) {
-      clearInterval(this.elapsedInterval);
-      this.elapsedInterval = null;
-    }
-  }
-
   public getStatus(): DaemonStatusPayload {
     const isTldZoneActive = Boolean(
       this.currentTargetName && (this.currentTargetName.startsWith('.') || this.currentTargetName.startsWith('*.'))
@@ -173,7 +173,7 @@ export class CrawlerDaemon {
       currentTargetName: this.currentTargetName,
       activePhase: this.activePhase,
       targetSubProgress: this.targetSubProgress,
-      elapsedSeconds: this.elapsedSeconds,
+      elapsedSeconds: this.getElapsedSeconds(),
       targets: this.targets,
       sessionTotal: this.sessionTotal,
       processedTargetsCount: this.processedTargetsCount,
@@ -219,12 +219,10 @@ export class CrawlerDaemon {
     }
 
     this.status = 'RUNNING';
-    if (!this.startedAt) {
-      this.startedAt = new Date().toISOString();
-      this.elapsedSeconds = 0;
-    }
+    this.startedAt = new Date().toISOString();
+    this.startTimeMs = Date.now();
+    this.pausedElapsedSeconds = 0;
     this.sessionTotal = this.targets.length;
-    this.startElapsedTimer();
     this.saveStateToFile();
 
     if (!this.isLoopRunning) {
@@ -254,6 +252,8 @@ export class CrawlerDaemon {
   }
 
   public pause() {
+    this.pausedElapsedSeconds = this.getElapsedSeconds();
+    this.startTimeMs = null;
     this.status = 'PAUSED';
     this.activePhase = 'Crawler Paused by Operator';
     for (const t of this.targets) {
@@ -267,13 +267,13 @@ export class CrawlerDaemon {
 
   public resume() {
     this.status = 'RUNNING';
+    this.startTimeMs = Date.now();
     this.activePhase = `Resuming Crawler • Cycle #${this.cycleCount}`;
     for (const t of this.targets) {
       if (t.status === 'paused') {
         t.status = 'pending';
       }
     }
-    this.startElapsedTimer();
     this.saveStateToFile();
 
     if (!this.isLoopRunning) {
@@ -283,6 +283,8 @@ export class CrawlerDaemon {
   }
 
   public async stop() {
+    this.pausedElapsedSeconds = this.getElapsedSeconds();
+    this.startTimeMs = null;
     this.status = 'COMPLETED';
     this.activePhase = 'Crawler Stopped';
     this.currentTargetName = null;
@@ -296,7 +298,6 @@ export class CrawlerDaemon {
       }
     }
 
-    this.stopElapsedTimer();
     this.saveStateToFile();
 
     try {
@@ -313,18 +314,18 @@ export class CrawlerDaemon {
     this.currentTargetName = null;
     this.activePhase = 'Standby';
     this.targetSubProgress = 0;
-    this.elapsedSeconds = 0;
     this.targets = [];
     this.sessionTotal = 0;
     this.processedTargetsCount = 0;
     this.startedAt = null;
+    this.startTimeMs = null;
+    this.pausedElapsedSeconds = 0;
     this.activeWorkers.clear();
     this.activeTargetResult = null;
     this.zoneDiscoveredCount = 0;
     this.zoneScannedCount = 0;
     this.currentCycleProgress = 0;
     this.currentCycleTotalCount = 0;
-    this.stopElapsedTimer();
 
     try {
       if (fs.existsSync(DAEMON_STATE_FILE)) {
@@ -365,13 +366,14 @@ export class CrawlerDaemon {
 
         if (!target) {
           if (this.isContinuous) {
-            // Milestone: Cycle 100% completed
+            // Milestone: Cycle 100% completed across all targets in queue
             this.currentCycleProgress = 100;
             this.targetSubProgress = 100;
             this.activePhase = `✅ Cycle #${this.cycleCount} Complete (100%) • Continuous 24/7 Engine Active • Advancing to Cycle #${this.cycleCount + 1}...`;
             this.saveStateToFile();
 
-            await new Promise((r) => setTimeout(r, 2000));
+            // Wait 3 seconds so user sees 100% cycle complete milestone clearly
+            await new Promise((r) => setTimeout(r, 3000));
             if (this.status !== 'RUNNING') break;
 
             const nextCycle = this.cycleCount + 1;
@@ -399,12 +401,12 @@ export class CrawlerDaemon {
 
         if (!target) continue;
 
+        // ONLY strictly dot-prefixed (.in, .com) or type === 'tld_zone' are TLD zones.
+        // Specific domains like gov.in or gov.pk are standard single target domains!
         const isTldTarget =
           target.type === 'tld_zone' ||
           target.domain.startsWith('.') ||
-          target.domain.startsWith('*.') ||
-          target.domain.startsWith('gov.') ||
-          target.domain.startsWith('nic.');
+          target.domain.startsWith('*.');
 
         if (isTldTarget) {
           await this.executeTldZonePass(target);
@@ -654,25 +656,18 @@ export class CrawlerDaemon {
 
       if (this.status !== 'RUNNING') return;
 
-      // Cycle reached 100%
+      // Cycle reached 100% for this target
+      target.status = 'completed';
       this.currentCycleProgress = 100;
       this.targetSubProgress = 100;
       this.zoneScannedCount = totalInCycle;
-      this.activePhase = `✅ Cycle #${this.cycleCount} Complete (100%) • ${totalInCycle} Root Domains Scanned • Advancing to Cycle #${this.cycleCount + 1}...`;
-      this.saveStateToFile();
-
-      await new Promise((r) => setTimeout(r, 2000));
-      if (this.status !== 'RUNNING') return;
-
-      // Advance cycle
-      this.cycleCount++;
-      this.currentCycleProgress = 1;
-      this.targetSubProgress = 1;
-      this.zoneScannedCount = 0;
       this.processedTargetsCount++;
+      this.activePhase = `✅ Completed TLD pass for ${target.domain} (${totalInCycle} root domains processed)`;
       this.saveStateToFile();
     } catch (err: any) {
       console.error(`[CrawlerDaemon] Error in TLD pass for ${target.domain}:`, err);
+      target.status = 'failed';
+      this.debounceSaveState();
     }
   }
 }
