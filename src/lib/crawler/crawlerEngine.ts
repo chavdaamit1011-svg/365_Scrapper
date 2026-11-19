@@ -367,7 +367,7 @@ export async function crawlDomain(
   }
 
   // Also queue homepages and contact pages of candidate subdomains for this cycle!
-  const cycleSubCandidates = Array.from(allSubdomains).slice(0, 10);
+  const cycleSubCandidates = Array.from(allSubdomains).slice(0, 30);
   for (const sub of cycleSubCandidates) {
     enqueueUrl(`https://${sub}`, 95, 1);
     enqueueUrl(`https://${sub}/contact`, 115, 1);
