@@ -550,8 +550,20 @@ export function useCrawlerController(
 
   const activeZonePhones = activeZoneDomains.reduce((acc, curr) => acc + (curr.phones?.length || 0), 0);
 
-  // Dynamic progress percentage
-  const dynamicProgress = status === 'COMPLETED' ? 100 : Math.min(100, Math.max(status === 'RUNNING' ? 1 : 0, targetSubProgress));
+  const pendingTargetsCount = targetsRef.current.filter((t) => !t.status || t.status === 'pending').length;
+  const isAllTargetsDone = targetsRef.current.length > 0 && pendingTargetsCount === 0;
+
+  // Dynamic progress percentage: capped at 95% while active crawl is in progress
+  let dynamicProgress = 0;
+  if (status === 'COMPLETED') {
+    dynamicProgress = 100;
+  } else if (status === 'RUNNING' || status === 'PAUSED') {
+    if (isAllTargetsDone) {
+      dynamicProgress = 100;
+    } else {
+      dynamicProgress = Math.min(95, Math.max(1, targetSubProgress || 1));
+    }
+  }
 
   const stats: CrawlerStats = {
     totalTargets: sessionTotal || targetsRef.current.length,

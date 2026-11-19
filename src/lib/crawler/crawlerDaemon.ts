@@ -223,6 +223,13 @@ export class CrawlerDaemon {
     this.startTimeMs = Date.now();
     this.pausedElapsedSeconds = 0;
     this.sessionTotal = this.targets.length;
+    this.processedTargetsCount = 0;
+    this.targetSubProgress = 1;
+    this.currentCycleProgress = 1;
+    this.activeWorkers.clear();
+    this.activeTargetResult = null;
+    this.zoneDiscoveredCount = 0;
+    this.zoneScannedCount = 0;
     this.saveStateToFile();
 
     if (!this.isLoopRunning) {
