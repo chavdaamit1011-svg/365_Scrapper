@@ -44,9 +44,17 @@ export const CrawlerControlBar: React.FC<CrawlerControlBarProps> = ({
   hasResults,
 }) => {
   const formatTime = (totalSeconds: number) => {
-    const mins = Math.floor(totalSeconds / 60);
-    const secs = totalSeconds % 60;
-    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const safeSecs = Math.max(0, Math.floor(totalSeconds || 0));
+    const hours = Math.floor(safeSecs / 3600);
+    const mins = Math.floor((safeSecs % 3600) / 60);
+    const secs = safeSecs % 60;
+
+    const pad2 = (n: number) => n.toString().padStart(2, '0');
+
+    if (hours > 0) {
+      return `${hours >= 100 ? hours : pad2(hours)}:${pad2(mins)}:${pad2(secs)}`;
+    }
+    return `${pad2(mins)}:${pad2(secs)}`;
   };
 
   const getStatusBadge = () => {
