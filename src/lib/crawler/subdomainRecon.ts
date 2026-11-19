@@ -4,6 +4,7 @@
  */
 
 import { connectMongo } from '../mongodb';
+import { promises as dnsPromises } from 'dns';
 
 const MULTI_PART_TLDS = new Set([
   // India
@@ -41,23 +42,24 @@ export function extractRootDomain(hostnameOrUrl: string): string {
   // Check 2-part ccTLDs like gov.in, co.in, co.uk, nic.in, org.in, gov.pk, etc.
   const lastTwo = parts.slice(-2).join('.');
   if (MULTI_PART_TLDS.has(lastTwo)) {
-    // If input is "ceogujarat.gov.in" (3 parts) -> returns "ceogujarat.gov.in"
-    // If input is "sub.ceogujarat.gov.in" (4 parts) -> returns "ceogujarat.gov.in"
     return parts.length >= 3 ? parts.slice(-3).join('.') : lastTwo;
   }
 
   // Standard TLDs (.com, .org, .net, etc.)
-  // Example: "sub.example.com" -> "example.com"
   return parts.slice(-2).join('.');
 }
 
 /**
  * Cleans a candidate subdomain string by removing protocol, port, path,
  * decoding URI encoding (e.g. %2f -> /), and stripping leading URL encoding leftovers (like 2f or 252f).
+ * Strips trailing dots and supports RFC compliance with underscores in DNS label bodies.
  */
 export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string | null {
   if (!raw || typeof raw !== 'string') return null;
   let s = raw.trim().toLowerCase();
+
+  // Strip trailing dots
+  s = s.replace(/\.+$/, '');
 
   // Decode URI if percent-encoded
   try {
@@ -87,14 +89,16 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string
     s = s.replace(/^\*\./, '').replace(/^\./, '');
   }
 
+  s = s.replace(/\.+$/, '');
+
   if (!s) return null;
 
   if (cleanRoot) {
-    const root = cleanRoot.trim().toLowerCase().replace(/^\*?\./, '');
-    if (s === root || !s.endsWith(`.${root}`)) return null;
+    const root = cleanRoot.trim().toLowerCase().replace(/^\*?\./, '').replace(/\.+$/, '');
+    if (s === root || !s.endsWith('.' + root)) return null;
   }
 
-  // Filter out emails, wildcards, slashes, percent, etc.
+  // Filter out invalid characters
   if (
     s.includes('@') ||
     s.includes('*') ||
@@ -103,17 +107,23 @@ export function cleanSubdomainCandidate(raw: string, cleanRoot?: string): string
     s.includes('\\') ||
     s.includes('%') ||
     s.includes('&') ||
-    s.includes('=')
+    s.includes('=') ||
+    s.includes(';') ||
+    s.includes('"') ||
+    s.includes("'") ||
+    s.includes('<') ||
+    s.includes('>')
   ) {
     return null;
   }
 
-  // Strict RFC DNS check
-  const dnsRegex = /^[a-z0-9]([a-z0-9\-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9\-]*[a-z0-9])?)*$/;
+  // RFC DNS check allowing letters, numbers, hyphens, and underscores (_) in label bodies
+  const dnsRegex = /^[a-z0-9_]([a-z0-9\-_]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9\-_]*[a-z0-9_])?)*$/;
   if (!dnsRegex.test(s)) return null;
 
   const parts = s.split('.');
   if (parts.length < 2) return null;
+
   // Reject junk hash labels (e.g. 132b114842d5f7d97bcc9a5af45dab47), UUIDs, and raw tracking IDs
   const hexHashRegex = /^[a-f0-9]{18,}$/i;
   for (const p of parts) {
@@ -140,11 +150,11 @@ export function isValidSubdomain(candidate: string, rootDomain: string): boolean
 
 /**
  * Safely extracts all subdomains of a root domain from raw HTML, text, or query results.
- * Strips URL-encoded artifacts (like 2f or 252f) and validates RFC compliance.
+ * Strips URL-encoded artifacts (like 2f or 252f), trailing dots, and validates RFC compliance.
  */
 export function extractSubdomainsFromText(text: string, rootDomain: string): string[] {
   if (!text || typeof text !== 'string') return [];
-  const cleanRoot = rootDomain.trim().toLowerCase().replace(/^\*?\./, '');
+  const cleanRoot = rootDomain.trim().toLowerCase().replace(/^\*?\./, '').replace(/\.+$/, '');
   const escapedRoot = cleanRoot.replace(/\./g, '\\.');
   const results = new Set<string>();
 
@@ -165,7 +175,7 @@ export function extractSubdomainsFromText(text: string, rootDomain: string): str
  * Multi-vector parallel OSINT & Certificate Transparency engine
  */
 export async function discoverAllSubdomains(rootDomain: string, cycle: number = 1): Promise<string[]> {
-  const cleanRoot = rootDomain.trim().toLowerCase().replace(/^\*?\./, '');
+  const cleanRoot = rootDomain.trim().toLowerCase().replace(/^\*?\./, '').replace(/\.+$/, '');
   const subdomains = new Set<string>();
 
   // Always include standard www subdomain candidate
@@ -182,237 +192,169 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     }
   };
 
-  // 1. Vector: Real DuckDuckGo Search Dorking
-  const fetchDuckDuckGoDorks = async () => {
-    try {
-      const queries = [
-        `site:${cleanRoot}`,
-        `site:*.${cleanRoot}`,
-        `site:${cleanRoot} -www`,
-        `site:*.${cleanRoot} -www`,
-        `site:*.${cleanRoot} -www -mail`,
-      ];
-      await Promise.allSettled(
-        queries.map(async (q) => {
+  // Helper to extract all matching subdomains from text/HTML body
+  const addFromText = (text: string) => {
+    if (!text || typeof text !== 'string') return;
+    const matches = text.match(subdomainRegex) || [];
+    for (const m of matches) {
+      addSub(m);
+    }
+  };
+
+  // 1. Vector: Certificate Transparency (crt.sh) - Ultra-High Yield Multi-Stream Architecture
+  // Uses streaming HTML table parsing (immune to 502 Bad Gateway and statement timeouts) + JSON fallback
+  const fetchCrtSh = async () => {
+    // 1A. Primary HTML stream (active + historical certificates)
+    const runHtmlStream = async (queryParam: string, timeoutMs: number = 35000) => {
+      try {
+        const res = await fetch(`https://crt.sh/?q=${queryParam}`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (res.ok) {
+          const html = await res.text();
+          addFromText(html);
+        }
+      } catch {}
+    };
+
+    // 1B. JSON API query
+    const runJsonStream = async (queryParam: string, timeoutMs: number = 25000) => {
+      try {
+        const res = await fetch(`https://crt.sh/?q=${queryParam}&output=json`, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            Accept: 'application/json, text/html, */*',
+          },
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (res.ok) {
+          const text = await res.text();
           try {
-            const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
-              headers: {
-                'User-Agent':
-                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-                Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-              },
-              signal: AbortSignal.timeout(8000),
-            });
-            if (res.ok) {
-              const html = await res.text();
-              const matches = html.match(subdomainRegex) || [];
-              for (const m of matches) addSub(m);
+            const data = JSON.parse(text);
+            if (Array.isArray(data)) {
+              for (const item of data) {
+                const rawNames = item.name_value || '';
+                for (let sub of String(rawNames).split(/[\r\n,]+/)) {
+                  sub = sub.trim().toLowerCase();
+                  if (sub.startsWith('*.')) sub = sub.slice(2);
+                  if (sub.startsWith('*')) sub = sub.slice(1);
+                  addSub(sub);
+                }
+                if (item.common_name) {
+                  let cn = String(item.common_name).trim().toLowerCase();
+                  if (cn.startsWith('*.')) cn = cn.slice(2);
+                  if (cn.startsWith('*')) cn = cn.slice(1);
+                  addSub(cn);
+                }
+              }
+              return;
             }
           } catch {}
-        })
-      );
-    } catch {}
-  };
-
-  // 2. Vector: Yahoo Web Search Dorking
-  const fetchYahooDorks = async () => {
-    const urls = [
-      `https://search.yahoo.com/search?p=site:${encodeURIComponent(cleanRoot)}&b=1`,
-      `https://search.yahoo.com/search?p=site:${encodeURIComponent(cleanRoot)}&b=11`,
-      `https://search.yahoo.com/search?p=site:*.${encodeURIComponent(cleanRoot)}&b=1`,
-      `https://search.yahoo.com/search?p=site:*.${encodeURIComponent(cleanRoot)}+-www&b=1`,
-    ];
-    await Promise.allSettled(
-      urls.map(async (u) => {
-        try {
-          const res = await fetch(u, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            },
-            signal: AbortSignal.timeout(8000),
-          });
-          if (res.ok) {
-            const html = await res.text();
-            const matches = html.match(subdomainRegex) || [];
-            for (const m of matches) addSub(m);
-          }
-        } catch {}
-      })
-    );
-  };
-
-  // 3. Vector: Bing Web Search Dorking
-  const fetchBingDorks = async () => {
-    const urls = [
-      `https://www.bing.com/search?q=site:${encodeURIComponent(cleanRoot)}&count=50`,
-      `https://www.bing.com/search?q=site:*.${encodeURIComponent(cleanRoot)}&count=50`,
-      `https://www.bing.com/search?q=site:*.${encodeURIComponent(cleanRoot)}+-www&count=50`,
-    ];
-    await Promise.allSettled(
-      urls.map(async (u) => {
-        try {
-          const res = await fetch(u, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            },
-            signal: AbortSignal.timeout(8000),
-          });
-          if (res.ok) {
-            const html = await res.text();
-            const matches = html.match(subdomainRegex) || [];
-            for (const m of matches) addSub(m);
-          }
-        } catch {}
-      })
-    );
-  };
-
-  // 4. Vector: URLScan.io Open Intelligence API (High Capacity)
-  const fetchUrlScan = async () => {
-    try {
-      const res = await fetch(`https://urlscan.io/api/v1/search/?q=domain:${encodeURIComponent(cleanRoot)}&size=1000`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.results)) {
-          for (const item of data.results) {
-            if (item.page?.domain) addSub(item.page.domain);
-            if (item.page?.subdomain) addSub(item.page.subdomain);
-            if (item.page?.url) {
-              try {
-                addSub(new URL(item.page.url).hostname);
-              } catch {}
-            }
-            if (item.task?.url) {
-              try {
-                addSub(new URL(item.task.url).hostname);
-              } catch {}
-            }
-          }
+          addFromText(text);
         }
-      }
-    } catch {}
+      } catch {}
+    };
+
+    await Promise.allSettled([
+      // Primary wildcard HTML stream
+      runHtmlStream(`%25.${encodeURIComponent(cleanRoot)}`, 35000),
+      // Active non-expired certs HTML stream
+      runHtmlStream(`%25.${encodeURIComponent(cleanRoot)}&exclude=expired`, 25000),
+      // Multi-level wildcard HTML stream (nested 3rd and 4th level subdomains)
+      runHtmlStream(`%25.%25.${encodeURIComponent(cleanRoot)}`, 25000),
+      // Apex certificates HTML stream
+      runHtmlStream(encodeURIComponent(cleanRoot), 20000),
+      // JSON endpoint
+      runJsonStream(`%25.${encodeURIComponent(cleanRoot)}`, 25000),
+    ]);
   };
 
-  // 5. Vector: RapidDNS Subdomain Database
-  const fetchRapidDns = async () => {
-    try {
-      const res = await fetch(`https://rapiddns.io/subdomain/${cleanRoot}?full=1`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (res.ok) {
-        const html = await res.text();
-        const matches = html.match(subdomainRegex) || [];
-        for (const m of matches) addSub(m);
-      }
-    } catch {}
-  };
-
-  // 6. Vector: HackerTarget Host Search
-  const fetchHackerTarget = async () => {
-    try {
-      const res = await fetch(`https://api.hackertarget.com/hostsearch/?q=${cleanRoot}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(8000),
-      });
-
-      if (res.ok) {
-        const text = await res.text();
-        const textLow = text.toLowerCase();
-        if (!textLow.includes('error') && !textLow.includes('quota') && !textLow.includes('api count exceeded')) {
-          for (const line of text.split('\n')) {
-            const trimmed = line.trim();
-            if (trimmed.includes(',')) {
-              const host = trimmed.split(',')[0].trim().toLowerCase();
-              addSub(host);
-            } else if (trimmed) {
-              const host = trimmed.split(/\s+/)[0].trim().toLowerCase();
-              addSub(host);
-            }
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 7. Vector: Certspotter Certificate Transparency (Ultra-Reliable JSON API)
+  // 2. Vector: CertSpotter Certificate Transparency with Cursor Pagination
   const fetchCertSpotter = async () => {
     try {
-      const res = await fetch(
-        `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(cleanRoot)}&include_subdomains=true&expand=dns_names`,
-        {
+      let afterCursor: string | null = null;
+      let page = 0;
+      const maxPages = 8; // Fetch up to 800 issuances
+
+      while (page < maxPages) {
+        page++;
+        const url: string = afterCursor
+          ? `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(cleanRoot)}&include_subdomains=true&expand=dns_names&after=${encodeURIComponent(afterCursor)}`
+          : `https://api.certspotter.com/v1/issuances?domain=${encodeURIComponent(cleanRoot)}&include_subdomains=true&expand=dns_names`;
+
+        const res = await fetch(url, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(12000),
-        }
-      );
-      if (res.ok) {
+          signal: AbortSignal.timeout(10000),
+        });
+
+        if (!res.ok) break;
         const data = await res.json();
-        if (Array.isArray(data)) {
-          for (const item of data) {
-            if (Array.isArray(item.dns_names)) {
-              for (const name of item.dns_names) {
-                addSub(name);
+        if (!Array.isArray(data) || data.length === 0) break;
+
+        for (const item of data) {
+          if (Array.isArray(item.dns_names)) {
+            for (const name of item.dns_names) {
+              addSub(name);
+            }
+          }
+        }
+
+        const lastItem = data[data.length - 1];
+        if (lastItem?.id && data.length >= 100) {
+          afterCursor = String(lastItem.id);
+        } else {
+          break;
+        }
+      }
+    } catch {}
+  };
+
+  // 3. Vector: URLScan.io Multi-Vector Intelligence
+  const fetchUrlScan = async () => {
+    const queries = [
+      `domain:${encodeURIComponent(cleanRoot)}`,
+      `page.domain:${encodeURIComponent(cleanRoot)}`,
+      `task.domain:${encodeURIComponent(cleanRoot)}`,
+    ];
+    await Promise.allSettled(
+      queries.map(async (q) => {
+        try {
+          const res = await fetch(`https://urlscan.io/api/v1/search/?q=${q}&size=1000`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(10000),
+          });
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data?.results)) {
+              for (const item of data.results) {
+                if (item.page?.domain) addSub(item.page.domain);
+                if (item.page?.subdomain) addSub(item.page.subdomain);
+                if (item.page?.url) {
+                  try { addSub(new URL(item.page.url).hostname); } catch {}
+                }
+                if (item.task?.url) {
+                  try { addSub(new URL(item.task.url).hostname); } catch {}
+                }
+                if (Array.isArray(item.page?.ptr)) {
+                  for (const ptr of item.page.ptr) addSub(ptr);
+                }
               }
             }
           }
-        }
-      }
-    } catch {}
+        } catch {}
+      })
+    );
   };
 
-  // 8. Vector: AlienVault OTX Passive DNS + URL Records
-  const fetchAlienVault = async () => {
-    try {
-      const [dnsRes, urlRes] = await Promise.allSettled([
-        fetch(
-          `https://otx.alienvault.com/api/v1/indicators/domain/${encodeURIComponent(cleanRoot)}/passive_dns`,
-          {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            signal: AbortSignal.timeout(10000),
-          }
-        ),
-        fetch(
-          `https://otx.alienvault.com/api/v1/indicators/domain/${encodeURIComponent(cleanRoot)}/url_list?limit=500`,
-          {
-            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-            signal: AbortSignal.timeout(10000),
-          }
-        ),
-      ]);
-
-      if (dnsRes.status === 'fulfilled' && dnsRes.value.ok) {
-        const data = await dnsRes.value.json();
-        if (Array.isArray(data?.passive_dns)) {
-          for (const item of data.passive_dns) {
-            if (item.hostname) addSub(item.hostname);
-          }
-        }
-      }
-
-      if (urlRes.status === 'fulfilled' && urlRes.value.ok) {
-        const data = await urlRes.value.json();
-        if (Array.isArray(data?.url_list)) {
-          for (const item of data.url_list) {
-            if (item.hostname) addSub(item.hostname);
-            else if (item.url) {
-              try { addSub(new URL(item.url).hostname); } catch {}
-            }
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 9. Vector: Subdomain Center Public Recon API
+  // 4. Vector: Subdomain Center Public Recon API
   const fetchSubdomainCenter = async () => {
     try {
       const res = await fetch(`https://api.subdomain.center/?domain=${encodeURIComponent(cleanRoot)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        headers: { 'User-Agent': 'Mozilla/5.0' },
         signal: AbortSignal.timeout(10000),
       });
       if (res.ok) {
@@ -426,146 +368,162 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     } catch {}
   };
 
-  // 10. Vector: ThreatCrowd Passive Intelligence API
-  const fetchThreatCrowd = async () => {
-    try {
-      const res = await fetch(`https://ci-www.threatcrowd.org/searchApi/v2/domain/report/?domain=${encodeURIComponent(cleanRoot)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.subdomains)) {
-          for (const s of data.subdomains) {
-            if (typeof s === 'string') addSub(s);
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 11. Vector: Anubis Subdomain Engine
-  const fetchAnubis = async () => {
-    try {
-      const res = await fetch(`https://jldc.me/anubis/subdomains/${encodeURIComponent(cleanRoot)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(7000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data)) {
-          for (const item of data) {
-            addSub(item);
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 12. Vector: ThreatMiner API
-  const fetchThreatMiner = async () => {
-    try {
-      const res = await fetch(`https://api.threatminer.org/v2/domain.php?q=${encodeURIComponent(cleanRoot)}&rt=5`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(6000),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (Array.isArray(data?.results)) {
-          for (const item of data.results) {
-            addSub(item);
-          }
-        }
-      }
-    } catch {}
-  };
-
-  // 13. Vector: Certificate Transparency (crt.sh) - Full Coverage (Zero Artificial Truncation)
-  const fetchCrtSh = async () => {
-    const urls = [
-      `https://crt.sh/?q=%.${encodeURIComponent(cleanRoot)}&output=json`,
-      `https://crt.sh/?q=%25.${encodeURIComponent(cleanRoot)}&output=json`,
-      `https://crt.sh/?q=${encodeURIComponent(cleanRoot)}&output=json`,
+  // 5. Vector: RapidDNS Subdomain Database (Multi-Page with Trailing Dot Cleaning)
+  const fetchRapidDns = async () => {
+    const pages = [
+      `https://rapiddns.io/subdomain/${encodeURIComponent(cleanRoot)}?full=1`,
+      `https://rapiddns.io/subdomain/${encodeURIComponent(cleanRoot)}?page=2`,
     ];
-
     await Promise.allSettled(
-      urls.map(async (url) => {
+      pages.map(async (u) => {
         try {
-          const res = await fetch(url, {
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-              Accept: 'application/json, text/html, */*',
-            },
-            signal: AbortSignal.timeout(25000),
+          const res = await fetch(u, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            signal: AbortSignal.timeout(10000),
           });
           if (res.ok) {
-            const text = await res.text();
-            let parsedAsJson = false;
-            try {
-              const data = JSON.parse(text);
-              if (Array.isArray(data)) {
-                parsedAsJson = true;
-                // Ingest ALL certificates - strictly zero artificial slicing!
-                for (const item of data) {
-                  const rawNames = item.name_value || '';
-                  for (let sub of String(rawNames).split(/[\r\n,]+/)) {
-                    sub = sub.trim().toLowerCase();
-                    if (sub.startsWith('*.')) sub = sub.slice(2);
-                    if (sub.startsWith('*')) sub = sub.slice(1);
-                    addSub(sub);
-                  }
-                  if (item.common_name) {
-                    let cn = String(item.common_name).trim().toLowerCase();
-                    if (cn.startsWith('*.')) cn = cn.slice(2);
-                    if (cn.startsWith('*')) cn = cn.slice(1);
-                    addSub(cn);
-                  }
-                }
-              }
-            } catch {}
-
-            // Fallback: If JSON parsing was not applicable or partial, extract subdomains via regex from response body
-            if (!parsedAsJson) {
-              const extracted = extractSubdomainsFromText(text, cleanRoot);
-              for (const s of extracted) addSub(s);
-            }
+            const html = await res.text();
+            addFromText(html);
           }
         } catch {}
       })
     );
   };
 
-  // 14. Vector: Archive.org Wayback Machine CDX (High Capacity)
-  const fetchArchiveOrg = async () => {
+  // 6. Vector: HackerTarget Host Search
+  const fetchHackerTarget = async () => {
     try {
-      const res = await fetch(
-        `https://web.archive.org/cdx/search/cdx?url=*.${encodeURIComponent(cleanRoot)}/*&output=json&collapse=urlkey&fl=original&limit=10000`,
-        {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(15000),
-        }
-      );
-
+      const res = await fetch(`https://api.hackertarget.com/hostsearch/?q=${encodeURIComponent(cleanRoot)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        signal: AbortSignal.timeout(8000),
+      });
       if (res.ok) {
-        const rows = await res.json();
-        if (Array.isArray(rows)) {
-          for (const row of rows.slice(1)) {
-            try {
-              const raw = row[0];
-              if (raw) {
-                const urlStr = raw.startsWith('http://') || raw.startsWith('https://') ? raw : `http://${raw}`;
-                const parsed = new URL(urlStr);
-                addSub(parsed.hostname);
-              }
-            } catch {}
+        const text = await res.text();
+        const textLow = text.toLowerCase();
+        if (!textLow.includes('error') && !textLow.includes('quota') && !textLow.includes('api count exceeded')) {
+          for (const line of text.split('\n')) {
+            const trimmed = line.trim();
+            if (trimmed.includes(',')) {
+              addSub(trimmed.split(',')[0].trim());
+            } else if (trimmed) {
+              addSub(trimmed.split(/\s+/)[0].trim());
+            }
           }
         }
       }
     } catch {}
   };
 
-  // 15. Vector: Active In-Page Subdomain Harvester (Crawls landing page HTML & assets)
+  // 7. Vector: AlienVault OTX General Domain Indicators
+  const fetchAlienVault = async () => {
+    try {
+      const res = await fetch(`https://otx.alienvault.com/api/v1/indicators/domain/${encodeURIComponent(cleanRoot)}/general`, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.base_indicator?.indicator) addSub(data.base_indicator.indicator);
+        if (data?.whois) addFromText(JSON.stringify(data.whois));
+      }
+    } catch {}
+  };
+
+  // 8. Vector: Advanced Negative Subtraction Dorking (DuckDuckGo, Yahoo, Bing)
+  const fetchAdvancedDorks = async () => {
+    const ddgQueries = [
+      `site:*.${cleanRoot} -site:www.${cleanRoot}`,
+      `site:*.${cleanRoot} -site:www.${cleanRoot} -site:mail.${cleanRoot}`,
+      `site:*.${cleanRoot} inurl:api`,
+      `site:*.${cleanRoot} inurl:portal`,
+      `site:*.${cleanRoot} inurl:admin`,
+      `site:*.${cleanRoot} inurl:app`,
+      `site:*.${cleanRoot} inurl:cloud`,
+      `site:*.${cleanRoot} inurl:cdn`,
+      `site:*.${cleanRoot} inurl:login`,
+      `site:*.${cleanRoot} inurl:dev`,
+      `site:*.${cleanRoot} inurl:test`,
+      `site:*.${cleanRoot} inurl:secure`,
+    ];
+
+    const yahooUrls = [
+      `https://search.yahoo.com/search?p=site:*.${encodeURIComponent(cleanRoot)}+-www&b=1`,
+      `https://search.yahoo.com/search?p=site:*.${encodeURIComponent(cleanRoot)}+inurl:portal&b=1`,
+      `https://search.yahoo.com/search?p=site:*.${encodeURIComponent(cleanRoot)}+inurl:api&b=1`,
+      `https://search.yahoo.com/search?p=site:*.${encodeURIComponent(cleanRoot)}+inurl:admin&b=1`,
+    ];
+
+    const bingUrls = [
+      `https://www.bing.com/search?q=site:*.${encodeURIComponent(cleanRoot)}+-www&count=50`,
+      `https://www.bing.com/search?q=site:*.${encodeURIComponent(cleanRoot)}+inurl:portal&count=50`,
+      `https://www.bing.com/search?q=site:*.${encodeURIComponent(cleanRoot)}+inurl:api&count=50`,
+    ];
+
+    await Promise.allSettled([
+      ...ddgQueries.map(async (q) => {
+        try {
+          const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`, {
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const html = await res.text();
+            addFromText(html);
+          }
+        } catch {}
+      }),
+      ...yahooUrls.map(async (u) => {
+        try {
+          const res = await fetch(u, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const html = await res.text();
+            addFromText(html);
+          }
+        } catch {}
+      }),
+      ...bingUrls.map(async (u) => {
+        try {
+          const res = await fetch(u, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+            signal: AbortSignal.timeout(8000),
+          });
+          if (res.ok) {
+            const html = await res.text();
+            addFromText(html);
+          }
+        } catch {}
+      }),
+    ]);
+  };
+
+  // 9. Vector: High-Speed Parallel DNS Verification of Top Subdomain Prefix Patterns
+  const fetchFastDnsProbe = async () => {
+    const commonPrefixes = [
+      'api', 'dev', 'portal', 'admin', 'mail', 'app', 'login', 'vpn', 'auth', 'cloud',
+      'cdn', 'secure', 'test', 'status', 'docs', 'remote', 'support', 'intra', 'webmail',
+      'staging', 'services', 'citizen', 'digital', 'data', 'pay', 'gateway', 'payment',
+      'apply', 'careers', 'jobs', 'tender', 'tenders', 'rti', 'recruitment', 'grievance',
+      'feedback', 'shop', 'blog', 'server', 'ns1', 'ns2', 'help', 'static', 'assets'
+    ];
+
+    await Promise.allSettled(
+      commonPrefixes.map(async (prefix) => {
+        try {
+          const cand = `${prefix}.${cleanRoot}`;
+          await dnsPromises.resolve(cand);
+          addSub(cand);
+        } catch {}
+      })
+    );
+  };
+
+  // 10. Vector: Active In-Page Subdomain Harvester (Landing HTML, Scripts, CSS, and Assets)
   const fetchInPageSubdomains = async () => {
     const urls = [`https://${cleanRoot}`, `https://www.${cleanRoot}`];
     await Promise.allSettled(
@@ -573,22 +531,20 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
         try {
           const res = await fetch(u, {
             headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+              'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             },
             signal: AbortSignal.timeout(6000),
           });
           if (res.ok) {
             const html = await res.text();
-            const matches = html.match(subdomainRegex) || [];
-            for (const m of matches) addSub(m);
+            addFromText(html);
           }
         } catch {}
       })
     );
   };
 
-  // 16. Vector: MongoDB Cross-Reference (scraped_results + master_subdomains + dorking_results)
+  // 11. Vector: MongoDB Master Collections Cross-Reference (Cycle > 1 continuous mode)
   const fetchMongo = async () => {
     if (cycle <= 1) return;
     try {
@@ -612,7 +568,7 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
       const dorkSubs = await db.collection('master_subdomains').find(
         { domain: cleanRoot },
         { projection: { subdomain: 1 } }
-      ).limit(1000).toArray();
+      ).limit(2000).toArray();
 
       for (const ds of dorkSubs) {
         if (ds.subdomain) addSub(ds.subdomain);
@@ -621,7 +577,7 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
       const dorkResults = await db.collection('dorking_results').find(
         { rootDomain: cleanRoot },
         { projection: { hostname: 1 } }
-      ).limit(1000).toArray();
+      ).limit(2000).toArray();
 
       for (const dr of dorkResults) {
         if (dr.hostname) addSub(dr.hostname);
@@ -629,22 +585,17 @@ export async function discoverAllSubdomains(rootDomain: string, cycle: number = 
     } catch {}
   };
 
-  // Run all 16 discovery vectors concurrently (100% Dynamic Online OSINT & Crawling)
+  // Execute all comprehensive discovery vectors concurrently
   await Promise.allSettled([
-    fetchDuckDuckGoDorks(),
-    fetchYahooDorks(),
-    fetchBingDorks(),
-    fetchUrlScan(),
+    fetchCrtSh(),
     fetchCertSpotter(),
-    fetchAlienVault(),
+    fetchUrlScan(),
     fetchSubdomainCenter(),
-    fetchThreatCrowd(),
-    fetchAnubis(),
     fetchRapidDns(),
     fetchHackerTarget(),
-    fetchThreatMiner(),
-    fetchCrtSh(),
-    fetchArchiveOrg(),
+    fetchAlienVault(),
+    fetchAdvancedDorks(),
+    fetchFastDnsProbe(),
     fetchInPageSubdomains(),
     fetchMongo(),
   ]);

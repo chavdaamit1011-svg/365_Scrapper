@@ -148,9 +148,9 @@ export function extractLinksAndSubdomains(
     processCandidateHref($(el).attr('href'));
   });
 
-  // 2. Process scripts, iframes, and link tags for hidden subdomains
-  $('script[src], iframe[src], link[href]').each((_, el) => {
-    const src = $(el).attr('src') || $(el).attr('href');
+  // 2. Process scripts, iframes, link tags, images, forms, and data attributes for hidden subdomains
+  $('script[src], iframe[src], link[href], img[src], form[action], [data-url], [data-src], [data-href]').each((_, el) => {
+    const src = $(el).attr('src') || $(el).attr('href') || $(el).attr('action') || $(el).attr('data-url') || $(el).attr('data-src') || $(el).attr('data-href');
     processCandidateHref(src);
   });
 
